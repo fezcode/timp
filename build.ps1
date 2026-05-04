@@ -1,4 +1,5 @@
-$ErrorActionPreference = 'Stop'
+# Don't use 'Stop' here — gcc writes warnings to stderr which PowerShell would treat as terminating errors.
+$ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
 
@@ -22,7 +23,7 @@ $winLibs = '-lole32','-lwinmm','-lm'
 
 New-Item -ItemType Directory -Force -Path build | Out-Null
 
-$srcs = 'main','audio','skin','ui','ini','font','playlist','filebrowser','fft','vendor'
+$srcs = 'main','audio','skin','ui','ini','font','playlist','filebrowser','fft','eq','vendor'
 foreach ($s in $srcs) {
     $src = "src\$s.c"
     $obj = "build\$s.o"

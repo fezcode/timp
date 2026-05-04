@@ -22,6 +22,8 @@ struct Audio {
     float capture[VIZ_SAMPLES];
     int capture_pos;
     SDL_mutex* mutex;
+
+    Eq eq;
 };
 
 static void data_callback(ma_device* dev, void* output, const void* input, ma_uint32 frames) {
@@ -39,6 +41,8 @@ static void data_callback(ma_device* dev, void* output, const void* input, ma_ui
 
     float v = a->volume;
     for (size_t i = 0; i < (size_t)read * channels; i++) out[i] *= v;
+
+    eq_process(&a->eq, out, (int)read, (int)channels);
 
     SDL_LockMutex(a->mutex);
     int pos = a->capture_pos;
@@ -78,11 +82,14 @@ Audio* audio_create(void) {
         return NULL;
     }
     a->device_inited = true;
+    eq_init(&a->eq, (int)a->device.sampleRate);
     if (ma_device_start(&a->device) != MA_SUCCESS) {
         fprintf(stderr, "audio: ma_device_start failed\n");
     }
     return a;
 }
+
+Eq* audio_get_eq(Audio* a) { return &a->eq; }
 
 void audio_destroy(Audio* a) {
     if (!a) return;

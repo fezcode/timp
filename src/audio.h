@@ -4,9 +4,13 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "eq.h"
+
 #define VIZ_SAMPLES 1024
 
 typedef struct Audio Audio;
+
+Eq* audio_get_eq(Audio* a);
 
 Audio* audio_create(void);
 void audio_destroy(Audio* a);

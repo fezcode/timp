@@ -29,6 +29,10 @@ typedef struct {
     // playlist panel state
     int pl_scroll;
     int pl_hover;
+
+    // EQ modal state
+    bool eq_open;
+    int eq_drag_band;  // -1 if not dragging a slider
 } UI;
 
 typedef struct {

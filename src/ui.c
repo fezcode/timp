@@ -14,9 +14,54 @@ void ui_init(UI* ui, SDL_Renderer* ren, Skin* skin) {
     ui->viz_mode = VIZ_WAVE;
     ui->spectrum_bar_count = 32;
     ui->pl_hover = -1;
+    ui->eq_drag_band = -1;
     snprintf(ui->display_title, sizeof(ui->display_title), "%s", "WHAMP - DROP A FILE");
     fb_init(&ui->fb);
 }
+
+// ----- EQ panel layout -----
+// y=0..14: drag region (shared with main UI)
+// y=18..30: header (title + ON/OFF + FLAT + BACK buttons)
+// y=34..148: 10 vertical sliders (114px high)
+// y=152..160: freq labels
+// y=164..174: dB readouts
+
+#define EQ_SLIDER_TOP    34
+#define EQ_SLIDER_BOTTOM 148
+#define EQ_SLIDER_W       8
+#define EQ_TRACK_W        4
+
+static SDL_Rect eq_slider_track_rect(const Skin* sk, int band) {
+    int margin = 14;
+    int total_w = sk->window_w - 2 * margin;
+    int spacing = total_w / EQ_BANDS;
+    int cx = margin + spacing * band + spacing / 2;
+    SDL_Rect r = { cx - EQ_TRACK_W / 2, EQ_SLIDER_TOP, EQ_TRACK_W, EQ_SLIDER_BOTTOM - EQ_SLIDER_TOP };
+    return r;
+}
+
+static SDL_Rect eq_slider_hit_rect(const Skin* sk, int band) {
+    SDL_Rect t = eq_slider_track_rect(sk, band);
+    SDL_Rect r = { t.x - 4, t.y - 6, t.w + 8, t.h + 12 };
+    return r;
+}
+
+// Map gain dB (-12..+12) to a y position inside the track (top=+12, bottom=-12).
+static int eq_gain_to_y(SDL_Rect track, float gain_db) {
+    float t = (gain_db + 12.f) / 24.f;  // 0..1
+    if (t < 0) t = 0; if (t > 1) t = 1;
+    return track.y + (int)((1.f - t) * track.h);
+}
+static float eq_y_to_gain(SDL_Rect track, int y) {
+    float t = 1.f - (float)(y - track.y) / (float)track.h;
+    if (t < 0) t = 0; if (t > 1) t = 1;
+    return t * 24.f - 12.f;
+}
+
+static SDL_Rect eq_btn_onoff(const Skin* sk) { return (SDL_Rect){ sk->window_w - 132, 18, 40, 12 }; }
+static SDL_Rect eq_btn_flat(const Skin* sk)  { return (SDL_Rect){ sk->window_w - 88, 18, 36, 12 }; }
+static SDL_Rect eq_btn_back(const Skin* sk)  { return (SDL_Rect){ sk->window_w - 48, 18, 40, 12 }; }
+
 
 #define PL_HEADER_H 12
 #define PL_ROW_H 11
@@ -101,11 +146,65 @@ static bool point_in(SDL_Rect r, int x, int y) {
     return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
 }
 
+static bool point_in_rect(SDL_Rect r, int x, int y) {
+    return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
+}
+
+static void eq_handle_event(UI* ui, const SDL_Event* e, Audio* audio, UiAction* act) {
+    Skin* sk = ui->skin;
+    Eq* eq = audio_get_eq(audio);
+
+    if (e->type == SDL_KEYDOWN) {
+        if (e->key.keysym.sym == SDLK_ESCAPE || e->key.keysym.sym == SDLK_e) {
+            ui->eq_open = false;
+            ui->eq_drag_band = -1;
+        }
+        return;
+    }
+    if (e->type == SDL_MOUSEBUTTONDOWN && e->button.button == SDL_BUTTON_LEFT) {
+        int mx = e->button.x, my = e->button.y;
+        int btn = skin_button_at(sk, mx, my);
+        if (btn == BTN_MIN) { act->minimize_requested = true; return; }
+        if (btn == BTN_CLOSE) { act->quit_requested = true; return; }
+        if (point_in_rect(eq_btn_onoff(sk), mx, my)) {
+            eq_set_enabled(eq, !eq_is_enabled(eq));
+            return;
+        }
+        if (point_in_rect(eq_btn_flat(sk), mx, my)) {
+            eq_flat(eq);
+            return;
+        }
+        if (point_in_rect(eq_btn_back(sk), mx, my)) {
+            ui->eq_open = false;
+            return;
+        }
+        for (int b = 0; b < EQ_BANDS; b++) {
+            if (point_in_rect(eq_slider_hit_rect(sk, b), mx, my)) {
+                ui->eq_drag_band = b;
+                SDL_Rect tr = eq_slider_track_rect(sk, b);
+                eq_set_gain(eq, b, eq_y_to_gain(tr, my));
+                return;
+            }
+        }
+    } else if (e->type == SDL_MOUSEBUTTONUP && e->button.button == SDL_BUTTON_LEFT) {
+        ui->eq_drag_band = -1;
+    } else if (e->type == SDL_MOUSEMOTION) {
+        if (ui->eq_drag_band >= 0) {
+            SDL_Rect tr = eq_slider_track_rect(sk, ui->eq_drag_band);
+            eq_set_gain(eq, ui->eq_drag_band, eq_y_to_gain(tr, e->motion.y));
+        }
+    }
+}
+
 UiAction ui_handle_event(UI* ui, const SDL_Event* e, Audio* audio, Playlist* pl) {
     UiAction act = {0};
 
     if (ui->fb.open) {
         fb_handle_event(&ui->fb, e, ui->skin);
+        return act;
+    }
+    if (ui->eq_open) {
+        eq_handle_event(ui, e, audio, &act);
         return act;
     }
 
@@ -215,6 +314,7 @@ UiAction ui_handle_event(UI* ui, const SDL_Event* e, Audio* audio, Playlist* pl)
             case SDLK_o:    fb_show(&ui->fb); break;
             case SDLK_l:    if (pl) playlist_set_loop(pl, !playlist_loop(pl)); break;
             case SDLK_h:    if (pl) playlist_set_shuffle(pl, !playlist_shuffle(pl)); break;
+            case SDLK_e:    ui->eq_open = true; break;
             default: break;
         }
     }
@@ -661,9 +761,108 @@ static void render_title(UI* ui) {
     font_draw(ui->ren, el->rect.x, ty, scale, el->color, shown);
 }
 
+static void render_text_button(SDL_Renderer* ren, SDL_Rect r, const char* label,
+                               SDL_Color face, SDL_Color edge, SDL_Color text) {
+    fill_rect(ren, r, face);
+    draw_rect(ren, r, edge);
+    int tw = font_text_width(1, label);
+    font_draw(ren, r.x + (r.w - tw) / 2, r.y + (r.h - FONT_H) / 2, 1, text, label);
+}
+
+static void render_eq(UI* ui, Audio* audio) {
+    Skin* sk = ui->skin;
+    Eq* eq = audio_get_eq(audio);
+
+    SDL_Rect full = { 0, 0, sk->window_w, sk->window_h };
+    fill_rect(ui->ren, full, sk->theme_bg);
+
+    // Title bar (drag region)
+    if (sk->drag_region.defined) {
+        SDL_Rect tb = sk->drag_region.rect;
+        fill_rect(ui->ren, tb, dim(sk->theme_panel, 0.7f));
+        SDL_SetRenderDrawColor(ui->ren, sk->theme_accent.r, sk->theme_accent.g, sk->theme_accent.b, 80);
+        SDL_RenderDrawLine(ui->ren, tb.x, tb.y + tb.h - 1, tb.x + tb.w, tb.y + tb.h - 1);
+        font_draw(ui->ren, tb.x + 4, tb.y + (tb.h - FONT_H) / 2, 1, sk->theme_accent, "WHAMP / EQ");
+    }
+    // Reuse min/close
+    if (sk->buttons[BTN_MIN].defined) {
+        icon_min(ui->ren, sk->buttons[BTN_MIN].hit, sk->theme_text);
+    }
+    if (sk->buttons[BTN_CLOSE].defined) {
+        icon_close(ui->ren, sk->buttons[BTN_CLOSE].hit, sk->theme_text);
+    }
+
+    // Header line: "EQUALIZER" + ON/OFF + FLAT + BACK
+    font_draw(ui->ren, 8, 20, 1, sk->theme_accent, "EQUALIZER");
+
+    SDL_Color on_face  = eq_is_enabled(eq) ? sk->theme_accent : dim(sk->theme_panel, 0.85f);
+    SDL_Color on_text  = eq_is_enabled(eq) ? sk->theme_bg : sk->theme_text;
+    SDL_Color edge_dim = dim(sk->theme_accent, 0.6f);
+    render_text_button(ui->ren, eq_btn_onoff(sk), eq_is_enabled(eq) ? "ON" : "OFF",
+                       on_face, edge_dim, on_text);
+    render_text_button(ui->ren, eq_btn_flat(sk), "FLAT",
+                       dim(sk->theme_panel, 0.85f), edge_dim, sk->theme_text);
+    render_text_button(ui->ren, eq_btn_back(sk), "BACK",
+                       dim(sk->theme_panel, 0.85f), edge_dim, sk->theme_text);
+
+    // Sliders
+    static const char* labels[EQ_BANDS] = { "60", "170", "310", "600", "1K", "3K", "6K", "12K", "14K", "16K" };
+    SDL_Color track_color = dim(sk->theme_accent, 0.4f);
+    SDL_Color cent_color  = dim(sk->theme_accent, 0.5f);
+
+    for (int b = 0; b < EQ_BANDS; b++) {
+        SDL_Rect tr = eq_slider_track_rect(sk, b);
+        // track
+        fill_rect(ui->ren, tr, (SDL_Color){ 8, 12, 16, 255 });
+        draw_rect(ui->ren, tr, track_color);
+
+        // center detent line
+        int mid_y = tr.y + tr.h / 2;
+        SDL_SetRenderDrawColor(ui->ren, cent_color.r, cent_color.g, cent_color.b, cent_color.a);
+        SDL_RenderDrawLine(ui->ren, tr.x - 3, mid_y, tr.x + tr.w + 2, mid_y);
+
+        // gain fill (from center toward thumb)
+        float g = eq_get_gain(eq, b);
+        int thumb_y = eq_gain_to_y(tr, g);
+        SDL_Rect fillr;
+        if (thumb_y < mid_y) {
+            fillr = (SDL_Rect){ tr.x + 1, thumb_y, tr.w - 2, mid_y - thumb_y };
+        } else {
+            fillr = (SDL_Rect){ tr.x + 1, mid_y, tr.w - 2, thumb_y - mid_y };
+        }
+        SDL_Color fc = eq_is_enabled(eq) ? sk->theme_accent : dim(sk->theme_accent, 0.5f);
+        fill_rect(ui->ren, fillr, fc);
+
+        // thumb
+        SDL_Rect thumb = { tr.x - 4, thumb_y - 2, tr.w + 8, 4 };
+        fill_rect(ui->ren, thumb, sk->theme_text);
+
+        // freq label below
+        int label_w = font_text_width(1, labels[b]);
+        font_draw(ui->ren, tr.x + (tr.w - label_w) / 2, EQ_SLIDER_BOTTOM + 6,
+                  1, sk->theme_text, labels[b]);
+
+        // dB readout — shown for whatever's currently being dragged, otherwise for all if non-zero
+        char db[8];
+        if (g >= 0.05f) snprintf(db, sizeof(db), "+%d", (int)(g + 0.5f));
+        else if (g <= -0.05f) snprintf(db, sizeof(db), "%d", (int)(g - 0.5f));
+        else db[0] = 0;
+        if (db[0]) {
+            int dw = font_text_width(1, db);
+            SDL_Color dc = (b == ui->eq_drag_band) ? sk->theme_accent : dim(sk->theme_text, 0.7f);
+            font_draw(ui->ren, tr.x + (tr.w - dw) / 2, EQ_SLIDER_BOTTOM + 16, 1, dc, db);
+        }
+    }
+}
+
 void ui_render(UI* ui, Audio* audio, Playlist* pl) {
     if (ui->fb.open) {
         fb_render(&ui->fb, ui->ren, ui->skin);
+        SDL_RenderPresent(ui->ren);
+        return;
+    }
+    if (ui->eq_open) {
+        render_eq(ui, audio);
         SDL_RenderPresent(ui->ren);
         return;
     }
