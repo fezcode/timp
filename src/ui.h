@@ -25,6 +25,10 @@ typedef struct {
     // smoothed spectrum bars (decays toward target so motion is fluid)
     float spectrum_bars[64];
     int spectrum_bar_count;
+
+    // playlist panel state
+    int pl_scroll;
+    int pl_hover;
 } UI;
 
 typedef struct {

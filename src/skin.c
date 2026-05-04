@@ -22,53 +22,56 @@ static SDL_Color make_color(unsigned char r, unsigned char g, unsigned char b, u
 void skin_default(Skin* skin) {
     memset(skin, 0, sizeof(*skin));
     snprintf(skin->name, sizeof(skin->name), "%s", "builtin");
-    skin->window_w = 380;
-    skin->window_h = 110;
+    skin->window_w = 300;
+    skin->window_h = 188;
 
     // Title bar / drag region
-    skin->drag_region.rect = (SDL_Rect){ 0, 0, 348, 14 };
+    skin->drag_region.rect = (SDL_Rect){ 0, 0, 268, 14 };
     skin->drag_region.defined = true;
 
-    skin->buttons[BTN_MIN].hit   = (SDL_Rect){ 348, 2, 14, 10 };
-    skin->buttons[BTN_MIN].defined = true;
-    skin->buttons[BTN_CLOSE].hit = (SDL_Rect){ 364, 2, 14, 10 };
-    skin->buttons[BTN_CLOSE].defined = true;
+    skin->buttons[BTN_MIN].hit   = (SDL_Rect){ 268, 2, 14, 10 };
+    skin->buttons[BTN_CLOSE].hit = (SDL_Rect){ 284, 2, 14, 10 };
 
     // Display elements
-    skin->title.rect      = (SDL_Rect){ 8, 16, 364, 9 };
+    skin->title.rect      = (SDL_Rect){ 6, 16, 288, 9 };
     skin->title.color     = make_color(80, 255, 130, 255);
     skin->title.defined   = true;
 
-    skin->time_disp.rect  = (SDL_Rect){ 8, 28, 60, 12 };
+    skin->time_disp.rect  = (SDL_Rect){ 6, 28, 52, 11 };
     skin->time_disp.color = make_color(80, 255, 130, 255);
     skin->time_disp.defined = true;
 
-    skin->viz.rect        = (SDL_Rect){ 72, 28, 300, 12 };
+    skin->viz.rect        = (SDL_Rect){ 60, 28, 234, 11 };
     skin->viz.color       = make_color(80, 255, 130, 255);
     skin->viz.defined     = true;
 
-    skin->pos_slider.rect = (SDL_Rect){ 8, 44, 364, 7 };
+    skin->pos_slider.rect = (SDL_Rect){ 6, 42, 288, 6 };
     skin->pos_slider.color = make_color(80, 255, 130, 255);
     skin->pos_slider.defined = true;
 
-    skin->vol_slider.rect = (SDL_Rect){ 8, 56, 200, 7 };
+    skin->vol_slider.rect = (SDL_Rect){ 6, 52, 160, 6 };
     skin->vol_slider.color = make_color(80, 255, 130, 255);
     skin->vol_slider.defined = true;
 
     // Transport row
-    int y = 70, h = 26, w = 40, gap = 4;
-    int xs = 8;
+    int y = 62, h = 22, w = 28, gap = 2;
+    int xs = 6;
     skin->buttons[BTN_PREV].hit  = (SDL_Rect){ xs + 0*(w+gap), y, w, h };
     skin->buttons[BTN_PLAY].hit  = (SDL_Rect){ xs + 1*(w+gap), y, w, h };
     skin->buttons[BTN_PAUSE].hit = (SDL_Rect){ xs + 2*(w+gap), y, w, h };
     skin->buttons[BTN_STOP].hit  = (SDL_Rect){ xs + 3*(w+gap), y, w, h };
     skin->buttons[BTN_NEXT].hit  = (SDL_Rect){ xs + 4*(w+gap), y, w, h };
     skin->buttons[BTN_OPEN].hit  = (SDL_Rect){ xs + 5*(w+gap), y, w, h };
-    skin->buttons[BTN_SHUFFLE].hit = (SDL_Rect){ skin->window_w - 2*(w+gap) + gap, y, w, h };
-    skin->buttons[BTN_LOOP].hit    = (SDL_Rect){ skin->window_w - (w+gap) + gap, y, w, h };
+    skin->buttons[BTN_SHUFFLE].hit = (SDL_Rect){ skin->window_w - 6 - 2*(w+gap) + gap, y, w, h };
+    skin->buttons[BTN_LOOP].hit    = (SDL_Rect){ skin->window_w - 6 - (w+gap) + gap, y, w, h };
     for (int i = 0; i < BTN_COUNT; i++) {
         if (skin->buttons[i].hit.w > 0) skin->buttons[i].defined = true;
     }
+
+    // Playlist panel
+    skin->playlist_rect.rect    = (SDL_Rect){ 6, 90, 288, 92 };
+    skin->playlist_rect.color   = make_color(80, 255, 130, 255);
+    skin->playlist_rect.defined = true;
 
     skin->theme_bg     = make_color(14, 18, 24, 255);
     skin->theme_panel  = make_color(28, 36, 46, 255);
@@ -148,6 +151,7 @@ bool skin_load(Skin* skin, SDL_Renderer* ren, const char* ini_path) {
         { "slider.position", &skin->pos_slider },
         { "slider.volume", &skin->vol_slider },
         { "drag", &skin->drag_region },
+        { "playlist", &skin->playlist_rect },
     };
     for (size_t i = 0; i < sizeof(els)/sizeof(els[0]); i++) {
         int x, y, w, h;

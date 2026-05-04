@@ -47,6 +47,7 @@ typedef struct {
     SkinElement pos_slider;
     SkinElement vol_slider;
     SkinElement drag_region;
+    SkinElement playlist_rect;
 
     SDL_Color theme_bg;
     SDL_Color theme_panel;

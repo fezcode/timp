@@ -13,8 +13,33 @@ void ui_init(UI* ui, SDL_Renderer* ren, Skin* skin) {
     ui->pressed_btn = -1;
     ui->viz_mode = VIZ_WAVE;
     ui->spectrum_bar_count = 32;
+    ui->pl_hover = -1;
     snprintf(ui->display_title, sizeof(ui->display_title), "%s", "WHAMP - DROP A FILE");
     fb_init(&ui->fb);
+}
+
+#define PL_HEADER_H 12
+#define PL_ROW_H 11
+
+static const char* pl_basename(const char* path) {
+    const char* s = strrchr(path, '/');
+    const char* s2 = strrchr(path, '\\');
+    if (s2 > s) s = s2;
+    return s ? s + 1 : path;
+}
+
+static int pl_visible_rows(const Skin* sk) {
+    if (!sk->playlist_rect.defined) return 0;
+    int avail = sk->playlist_rect.rect.h - PL_HEADER_H;
+    return avail / PL_ROW_H;
+}
+
+static int pl_clamp_scroll(int scroll, int total, int rows) {
+    int max_s = total - rows;
+    if (max_s < 0) max_s = 0;
+    if (scroll < 0) scroll = 0;
+    if (scroll > max_s) scroll = max_s;
+    return scroll;
 }
 
 void ui_destroy(UI* ui) {
@@ -85,6 +110,44 @@ UiAction ui_handle_event(UI* ui, const SDL_Event* e, Audio* audio, Playlist* pl)
     }
 
     Skin* sk = ui->skin;
+
+    // Playlist panel hover/scroll/click — handled before main button hit-testing.
+    if (sk->playlist_rect.defined) {
+        SDL_Rect plr = sk->playlist_rect.rect;
+        SDL_Rect rows = { plr.x, plr.y + PL_HEADER_H, plr.w, plr.h - PL_HEADER_H };
+        int rows_visible = pl_visible_rows(sk);
+
+        if (e->type == SDL_MOUSEMOTION) {
+            int mx = e->motion.x, my = e->motion.y;
+            ui->pl_hover = -1;
+            if (mx >= rows.x && mx < rows.x + rows.w && my >= rows.y && my < rows.y + rows.h) {
+                int row = (my - rows.y) / PL_ROW_H;
+                int idx = ui->pl_scroll + row;
+                if (idx >= 0 && idx < playlist_count(pl)) ui->pl_hover = idx;
+            }
+        } else if (e->type == SDL_MOUSEWHEEL) {
+            int mx, my;
+            SDL_GetMouseState(&mx, &my);
+            if (mx >= plr.x && mx < plr.x + plr.w && my >= plr.y && my < plr.y + plr.h) {
+                ui->pl_scroll = pl_clamp_scroll(ui->pl_scroll - e->wheel.y * 3,
+                                                playlist_count(pl), rows_visible);
+                return act;
+            }
+        } else if (e->type == SDL_MOUSEBUTTONDOWN && e->button.button == SDL_BUTTON_LEFT) {
+            int mx = e->button.x, my = e->button.y;
+            if (mx >= rows.x && mx < rows.x + rows.w && my >= rows.y && my < rows.y + rows.h) {
+                int row = (my - rows.y) / PL_ROW_H;
+                int idx = ui->pl_scroll + row;
+                if (idx >= 0 && idx < playlist_count(pl)) {
+                    playlist_set_index(pl, idx);
+                    const char* path = playlist_current(pl);
+                    if (path && audio_load(audio, path)) audio_play(audio);
+                }
+                return act;
+            }
+        }
+    }
+
     if (e->type == SDL_MOUSEBUTTONDOWN && e->button.button == SDL_BUTTON_LEFT) {
         int mx = e->button.x, my = e->button.y;
         int btn = skin_button_at(sk, mx, my);
@@ -510,6 +573,77 @@ static void render_time(UI* ui, Audio* audio) {
     font_draw(ui->ren, tx, ty, scale, td->color, buf);
 }
 
+static void render_playlist(UI* ui, Playlist* pl) {
+    Skin* sk = ui->skin;
+    if (!sk->playlist_rect.defined) return;
+    SDL_Rect r = sk->playlist_rect.rect;
+
+    // Outer panel
+    fill_rect(ui->ren, r, (SDL_Color){ 6, 10, 14, 255 });
+    draw_rect(ui->ren, r, dim(sk->theme_accent, 0.33f));
+
+    // Header
+    SDL_Rect head = { r.x + 1, r.y + 1, r.w - 2, PL_HEADER_H - 1 };
+    fill_rect(ui->ren, head, dim(sk->theme_panel, 0.85f));
+    SDL_SetRenderDrawColor(ui->ren, sk->theme_accent.r, sk->theme_accent.g, sk->theme_accent.b, 80);
+    SDL_RenderDrawLine(ui->ren, head.x, head.y + head.h, head.x + head.w, head.y + head.h);
+
+    char hdr[64];
+    int total = playlist_count(pl);
+    snprintf(hdr, sizeof(hdr), "PLAYLIST  [%d]", total);
+    font_draw(ui->ren, head.x + 4, head.y + (head.h - FONT_H) / 2, 1, sk->theme_accent, hdr);
+
+    // Rows
+    SDL_Rect rows_rect = { r.x + 1, r.y + PL_HEADER_H, r.w - 2, r.h - PL_HEADER_H - 1 };
+    int rows_visible = pl_visible_rows(sk);
+    ui->pl_scroll = pl_clamp_scroll(ui->pl_scroll, total, rows_visible);
+
+    int cur = playlist_index(pl);
+    for (int row = 0; row < rows_visible; row++) {
+        int idx = ui->pl_scroll + row;
+        if (idx >= total) break;
+        SDL_Rect rrow = { rows_rect.x, rows_rect.y + row * PL_ROW_H, rows_rect.w, PL_ROW_H };
+
+        bool is_current = (idx == cur);
+        bool is_hover   = (idx == ui->pl_hover);
+        if (is_current) {
+            fill_rect(ui->ren, rrow, dim(sk->theme_accent, 0.18f));
+        } else if (is_hover) {
+            fill_rect(ui->ren, rrow, dim(sk->theme_panel, 0.7f));
+        }
+
+        char num[8];
+        snprintf(num, sizeof(num), "%2d", idx + 1);
+        SDL_Color num_color = is_current ? sk->theme_accent : dim(sk->theme_text, 0.6f);
+        font_draw(ui->ren, rrow.x + 4, rrow.y + (rrow.h - FONT_H) / 2, 1, num_color, num);
+
+        const char* path = pl->paths[idx];
+        const char* name = pl_basename(path);
+        char shown[256];
+        snprintf(shown, sizeof(shown), "%s", name);
+        int max_chars = (rrow.w - 28 - 6) / (FONT_W + 1);
+        if ((int)strlen(shown) > max_chars && max_chars > 3) {
+            shown[max_chars - 3] = '.';
+            shown[max_chars - 2] = '.';
+            shown[max_chars - 1] = '.';
+            shown[max_chars] = 0;
+        }
+        SDL_Color name_color = is_current ? sk->theme_accent : sk->theme_text;
+        font_draw(ui->ren, rrow.x + 22, rrow.y + (rrow.h - FONT_H) / 2, 1, name_color, shown);
+    }
+
+    // Scrollbar
+    if (total > rows_visible) {
+        SDL_Rect sb = { rows_rect.x + rows_rect.w - 4, rows_rect.y + 1, 3, rows_rect.h - 2 };
+        fill_rect(ui->ren, sb, dim(sk->theme_panel, 0.6f));
+        float th_h = (float)rows_visible / (float)total * (float)sb.h;
+        if (th_h < 8) th_h = 8;
+        float th_y = (float)ui->pl_scroll / (float)(total - rows_visible) * (sb.h - th_h);
+        SDL_Rect th = { sb.x, sb.y + (int)th_y, sb.w, (int)th_h };
+        fill_rect(ui->ren, th, sk->theme_accent);
+    }
+}
+
 static void render_title(UI* ui) {
     SkinElement* el = &ui->skin->title;
     if (!el->defined) return;
@@ -550,6 +684,7 @@ void ui_render(UI* ui, Audio* audio, Playlist* pl) {
     render_time(ui, audio);
     render_title(ui);
     render_viz(ui, audio);
+    render_playlist(ui, pl);
 
     SDL_RenderPresent(ui->ren);
 }
