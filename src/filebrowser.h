@@ -7,10 +7,12 @@
 
 #define FB_MAX_ENTRIES 4096
 #define FB_PATH_MAX 520
+#define FB_MAX_PICKS 256
 
 typedef struct {
     char name[260];
     bool is_dir;
+    bool selected;
 } FbEntry;
 
 typedef struct {
@@ -20,12 +22,13 @@ typedef struct {
     int n_entries;
     int cap_entries;
     int hover;
-    int scroll;          // first visible row
-    int rows_visible;    // computed at render time
+    int anchor;          // last clicked row, for shift-range
+    int scroll;
+    int rows_visible;
 
-    // result
     bool result_ready;
-    char result_path[FB_PATH_MAX];
+    char result_paths[FB_MAX_PICKS][FB_PATH_MAX];
+    int  result_count;
 } FileBrowser;
 
 void fb_init(FileBrowser* fb);
@@ -34,8 +37,9 @@ void fb_destroy(FileBrowser* fb);
 void fb_show(FileBrowser* fb);
 void fb_close(FileBrowser* fb);
 
-// Returns true if a file was selected this frame; result_path holds it.
-bool fb_take_result(FileBrowser* fb, char* out, int out_size);
+int  fb_result_count(const FileBrowser* fb);
+const char* fb_result_path(const FileBrowser* fb, int i);
+void fb_clear_result(FileBrowser* fb);
 
 void fb_handle_event(FileBrowser* fb, const SDL_Event* e, const Skin* skin);
 void fb_render(FileBrowser* fb, SDL_Renderer* ren, const Skin* skin);

@@ -95,9 +95,9 @@ void ui_set_title(UI* ui, const char* title) {
     snprintf(ui->display_title, sizeof(ui->display_title), "%s", title);
 }
 
-bool ui_take_picked_file(UI* ui, char* out, int out_size) {
-    return fb_take_result(&ui->fb, out, out_size);
-}
+int ui_picks_count(UI* ui) { return fb_result_count(&ui->fb); }
+const char* ui_pick_path(UI* ui, int i) { return fb_result_path(&ui->fb, i); }
+void ui_clear_picks(UI* ui) { fb_clear_result(&ui->fb); }
 
 static void load_and_play(Audio* audio, const char* path) {
     if (!path) return;

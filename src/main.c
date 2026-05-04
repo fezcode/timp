@@ -123,6 +123,8 @@ int main(int argc, char** argv) {
 
     int last_pl_index = playlist_index(&pl);
     bool drop_active = false;
+    bool drop_was_idle = false;       // was nothing loaded/playing when this drop started?
+    int  drop_first_new_index = 0;    // first slot the dropped files landed in
 
     int running = 1;
     while (running) {
@@ -131,20 +133,34 @@ int main(int argc, char** argv) {
             switch (e.type) {
                 case SDL_QUIT: running = 0; break;
                 case SDL_DROPBEGIN:
-                    playlist_clear(&pl);
                     drop_active = true;
+                    drop_was_idle = !audio_is_loaded(audio) || !audio_is_playing(audio);
+                    drop_first_new_index = playlist_count(&pl);
                     break;
                 case SDL_DROPFILE: {
                     char* path = e.drop.file;
-                    if (!drop_active) playlist_clear(&pl);
-                    playlist_add(&pl, path);
+                    if (!drop_active) {
+                        // unbracketed single drop: start now if idle, otherwise just append
+                        bool was_idle = !audio_is_loaded(audio) || !audio_is_playing(audio);
+                        int first_new = playlist_count(&pl);
+                        playlist_add(&pl, path);
+                        if (was_idle) {
+                            playlist_set_index(&pl, first_new);
+                            load_current(audio, &pl, true);
+                        }
+                    } else {
+                        playlist_add(&pl, path);
+                    }
                     SDL_free(path);
-                    if (!drop_active) load_current(audio, &pl, true);
                     break;
                 }
                 case SDL_DROPCOMPLETE:
+                    if (drop_active && drop_was_idle &&
+                        playlist_count(&pl) > drop_first_new_index) {
+                        playlist_set_index(&pl, drop_first_new_index);
+                        load_current(audio, &pl, true);
+                    }
                     drop_active = false;
-                    if (playlist_count(&pl) > 0) load_current(audio, &pl, true);
                     break;
                 default: {
                     UiAction act = ui_handle_event(&ui, &e, audio, &pl);
@@ -155,12 +171,20 @@ int main(int argc, char** argv) {
             }
         }
 
-        // File browser may have produced a selection.
-        char picked[1024];
-        if (ui_take_picked_file(&ui, picked, sizeof(picked))) {
-            playlist_clear(&pl);
-            playlist_add(&pl, picked);
-            load_current(audio, &pl, true);
+        // File browser may have produced one or more selections — append to playlist;
+        // start playing the first new one if nothing was playing.
+        int n_picks = ui_picks_count(&ui);
+        if (n_picks > 0) {
+            bool was_idle = !audio_is_loaded(audio) || !audio_is_playing(audio);
+            int first_new = playlist_count(&pl);
+            for (int i = 0; i < n_picks; i++) {
+                playlist_add(&pl, ui_pick_path(&ui, i));
+            }
+            ui_clear_picks(&ui);
+            if (was_idle && playlist_count(&pl) > first_new) {
+                playlist_set_index(&pl, first_new);
+                load_current(audio, &pl, true);
+            }
         }
 
         if (audio_finished(audio)) {

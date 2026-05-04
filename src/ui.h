@@ -48,6 +48,8 @@ void ui_set_title(UI* ui, const char* title);
 UiAction ui_handle_event(UI* ui, const SDL_Event* e, Audio* audio, Playlist* pl);
 void ui_render(UI* ui, Audio* audio, Playlist* pl);
 
-bool ui_take_picked_file(UI* ui, char* out, int out_size);
+int  ui_picks_count(UI* ui);
+const char* ui_pick_path(UI* ui, int i);
+void ui_clear_picks(UI* ui);
 
 #endif

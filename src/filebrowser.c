@@ -111,6 +111,7 @@ static void fb_scan(FileBrowser* fb) {
 #endif
 
     qsort(fb->entries, fb->n_entries, sizeof(FbEntry), cmp_entry);
+    fb->anchor = -1;
 }
 
 static void fb_navigate(FileBrowser* fb, const char* name) {
@@ -140,6 +141,7 @@ static void fb_navigate(FileBrowser* fb, const char* name) {
 void fb_init(FileBrowser* fb) {
     memset(fb, 0, sizeof(*fb));
     fb->hover = -1;
+    fb->anchor = -1;
 #ifdef _WIN32
     char buf[FB_PATH_MAX];
     if (_getcwd(buf, sizeof(buf))) {
@@ -169,11 +171,52 @@ void fb_show(FileBrowser* fb) {
 
 void fb_close(FileBrowser* fb) { fb->open = false; }
 
-bool fb_take_result(FileBrowser* fb, char* out, int out_size) {
-    if (!fb->result_ready) return false;
-    snprintf(out, out_size, "%s", fb->result_path);
+int fb_result_count(const FileBrowser* fb) {
+    return fb->result_ready ? fb->result_count : 0;
+}
+
+const char* fb_result_path(const FileBrowser* fb, int i) {
+    if (!fb->result_ready || i < 0 || i >= fb->result_count) return NULL;
+    return fb->result_paths[i];
+}
+
+void fb_clear_result(FileBrowser* fb) {
     fb->result_ready = false;
-    return true;
+    fb->result_count = 0;
+}
+
+static void fb_clear_selection(FileBrowser* fb) {
+    for (int i = 0; i < fb->n_entries; i++) fb->entries[i].selected = false;
+}
+
+static int fb_count_selected_files(const FileBrowser* fb) {
+    int n = 0;
+    for (int i = 0; i < fb->n_entries; i++) {
+        if (fb->entries[i].selected && !fb->entries[i].is_dir) n++;
+    }
+    return n;
+}
+
+static void fb_commit_selection(FileBrowser* fb, int fallback_idx) {
+    fb->result_count = 0;
+    for (int i = 0; i < fb->n_entries && fb->result_count < FB_MAX_PICKS; i++) {
+        if (fb->entries[i].selected && !fb->entries[i].is_dir) {
+            snprintf(fb->result_paths[fb->result_count],
+                     sizeof(fb->result_paths[0]), "%s%c%s",
+                     fb->cwd, WH_SEP, fb->entries[i].name);
+            fb->result_count++;
+        }
+    }
+    if (fb->result_count == 0 && fallback_idx >= 0 && fallback_idx < fb->n_entries
+        && !fb->entries[fallback_idx].is_dir) {
+        snprintf(fb->result_paths[0], sizeof(fb->result_paths[0]), "%s%c%s",
+                 fb->cwd, WH_SEP, fb->entries[fallback_idx].name);
+        fb->result_count = 1;
+    }
+    if (fb->result_count > 0) {
+        fb->result_ready = true;
+        fb_close(fb);
+    }
 }
 
 // ----- Rendering & input -----
@@ -190,6 +233,11 @@ static SDL_Rect list_rect(const Skin* skin) {
 
 static SDL_Rect cancel_rect(const Skin* skin) {
     SDL_Rect r = { skin->window_w - 64, skin->window_h - FOOTER_H + 4, 56, 14 };
+    return r;
+}
+
+static SDL_Rect open_rect(const Skin* skin) {
+    SDL_Rect r = { skin->window_w - 128, skin->window_h - FOOTER_H + 4, 56, 14 };
     return r;
 }
 
@@ -221,20 +269,23 @@ void fb_handle_event(FileBrowser* fb, const SDL_Event* e, const Skin* skin) {
                 if (fb->hover < fb->scroll) fb->scroll = fb->hover < 0 ? 0 : fb->hover;
                 return;
             case SDLK_RETURN:
-                if (fb->hover >= 0 && fb->hover < fb->n_entries) {
-                    FbEntry* en = &fb->entries[fb->hover];
-                    if (en->is_dir) {
-                        fb_navigate(fb, en->name);
-                    } else {
-                        snprintf(fb->result_path, sizeof(fb->result_path), "%s%c%s",
-                                 fb->cwd, WH_SEP, en->name);
-                        fb->result_ready = true;
-                        fb_close(fb);
-                    }
+                // Enter: if hover is dir, navigate; otherwise open all selected (or hover)
+                if (fb->hover >= 0 && fb->hover < fb->n_entries
+                    && fb->entries[fb->hover].is_dir) {
+                    fb_navigate(fb, fb->entries[fb->hover].name);
+                } else {
+                    fb_commit_selection(fb, fb->hover);
                 }
                 return;
             case SDLK_BACKSPACE:
                 fb_navigate(fb, "..");
+                return;
+            case SDLK_a:
+                if (SDL_GetModState() & KMOD_CTRL) {
+                    for (int i = 0; i < fb->n_entries; i++) {
+                        if (!fb->entries[i].is_dir) fb->entries[i].selected = true;
+                    }
+                }
                 return;
             default: break;
         }
@@ -255,23 +306,58 @@ void fb_handle_event(FileBrowser* fb, const SDL_Event* e, const Skin* skin) {
     } else if (e->type == SDL_MOUSEBUTTONDOWN && e->button.button == SDL_BUTTON_LEFT) {
         int mx = e->button.x, my = e->button.y;
         SDL_Rect cr = cancel_rect(skin);
+        SDL_Rect orr = open_rect(skin);
         if (mx >= cr.x && mx < cr.x + cr.w && my >= cr.y && my < cr.y + cr.h) {
             fb_close(fb);
+            return;
+        }
+        if (mx >= orr.x && mx < orr.x + orr.w && my >= orr.y && my < orr.y + orr.h) {
+            fb_commit_selection(fb, fb->hover);
             return;
         }
         if (mx >= lr.x && mx < lr.x + lr.w && my >= lr.y && my < lr.y + lr.h) {
             int row = (my - lr.y) / ROW_HEIGHT;
             int idx = fb->scroll + row;
-            if (idx >= 0 && idx < fb->n_entries) {
-                FbEntry* en = &fb->entries[idx];
+            if (idx < 0 || idx >= fb->n_entries) return;
+            FbEntry* en = &fb->entries[idx];
+
+            // Double-click: navigate dir or open file immediately
+            if (e->button.clicks >= 2) {
                 if (en->is_dir) {
                     fb_navigate(fb, en->name);
                 } else {
-                    snprintf(fb->result_path, sizeof(fb->result_path), "%s%c%s",
-                             fb->cwd, WH_SEP, en->name);
-                    fb->result_ready = true;
-                    fb_close(fb);
+                    fb_clear_selection(fb);
+                    en->selected = true;
+                    fb_commit_selection(fb, idx);
                 }
+                return;
+            }
+
+            // Directories navigate on single click (no selection state)
+            if (en->is_dir) {
+                fb_navigate(fb, en->name);
+                return;
+            }
+
+            // Files: select with modifier-aware behavior
+            SDL_Keymod mod = SDL_GetModState();
+            bool ctrl  = (mod & KMOD_CTRL)  != 0;
+            bool shift = (mod & KMOD_SHIFT) != 0;
+
+            if (shift && fb->anchor >= 0 && fb->anchor < fb->n_entries) {
+                fb_clear_selection(fb);
+                int lo = fb->anchor < idx ? fb->anchor : idx;
+                int hi = fb->anchor < idx ? idx : fb->anchor;
+                for (int i = lo; i <= hi; i++) {
+                    if (!fb->entries[i].is_dir) fb->entries[i].selected = true;
+                }
+            } else if (ctrl) {
+                en->selected = !en->selected;
+                fb->anchor = idx;
+            } else {
+                fb_clear_selection(fb);
+                en->selected = true;
+                fb->anchor = idx;
             }
         }
     }
@@ -317,12 +403,21 @@ void fb_render(FileBrowser* fb, SDL_Renderer* ren, const Skin* skin) {
         if (idx >= fb->n_entries) break;
         FbEntry* en = &fb->entries[idx];
         SDL_Rect row = { lr.x + 1, lr.y + 1 + r * ROW_HEIGHT, lr.w - 2, ROW_HEIGHT };
-        if (idx == fb->hover) fill(ren, row, skin->theme_panel);
+        if (en->selected) {
+            SDL_Color bg = { (Uint8)(skin->theme_accent.r / 4 + skin->theme_panel.r / 2),
+                             (Uint8)(skin->theme_accent.g / 4 + skin->theme_panel.g / 2),
+                             (Uint8)(skin->theme_accent.b / 4 + skin->theme_panel.b / 2), 255 };
+            fill(ren, row, bg);
+        } else if (idx == fb->hover) {
+            fill(ren, row, skin->theme_panel);
+        }
 
-        SDL_Color color = en->is_dir ? skin->theme_accent : skin->theme_text;
+        SDL_Color color = en->is_dir ? skin->theme_accent
+                          : (en->selected ? skin->theme_accent : skin->theme_text);
         char label[260];
-        if (en->is_dir) snprintf(label, sizeof(label), "[ ] %s", en->name);
-        else            snprintf(label, sizeof(label), "    %s", en->name);
+        if (en->is_dir)        snprintf(label, sizeof(label), "[ ] %s", en->name);
+        else if (en->selected) snprintf(label, sizeof(label), " *  %s", en->name);
+        else                   snprintf(label, sizeof(label), "    %s", en->name);
 
         // truncate to fit row width
         int max_c = (row.w - 8) / (FONT_W + 1);
@@ -350,6 +445,20 @@ void fb_render(FileBrowser* fb, SDL_Renderer* ren, const Skin* skin) {
     SDL_Rect footer = { 0, skin->window_h - FOOTER_H, skin->window_w, FOOTER_H };
     fill(ren, footer, skin->theme_panel);
 
+    SDL_Rect orr = open_rect(skin);
+    int n_sel = fb_count_selected_files(fb);
+    SDL_Color open_face = (n_sel > 0)
+        ? skin->theme_accent
+        : (SDL_Color){ skin->theme_bg.r, skin->theme_bg.g, skin->theme_bg.b, 255 };
+    SDL_Color open_text = (n_sel > 0) ? skin->theme_bg : skin->theme_text;
+    fill(ren, orr, open_face);
+    stroke(ren, orr, skin->theme_accent);
+    char ob[24];
+    if (n_sel > 1) snprintf(ob, sizeof(ob), "OPEN %d", n_sel);
+    else           snprintf(ob, sizeof(ob), "OPEN");
+    int otw = font_text_width(1, ob);
+    font_draw(ren, orr.x + (orr.w - otw) / 2, orr.y + (orr.h - FONT_H) / 2, 1, open_text, ob);
+
     SDL_Rect cr = cancel_rect(skin);
     fill(ren, cr, (SDL_Color){ skin->theme_bg.r, skin->theme_bg.g, skin->theme_bg.b, 255 });
     stroke(ren, cr, skin->theme_accent);
@@ -357,5 +466,5 @@ void fb_render(FileBrowser* fb, SDL_Renderer* ren, const Skin* skin) {
     font_draw(ren, cr.x + (cr.w - tw) / 2, cr.y + (cr.h - FONT_H) / 2, 1, skin->theme_text, "CANCEL");
 
     font_draw(ren, 8, footer.y + (FOOTER_H - FONT_H) / 2, 1, skin->theme_text,
-              "ENTER OPEN  BKSP UP  ESC CANCEL");
+              "CTRL-CLICK MULTI  SHIFT-CLICK RANGE  CTRL-A ALL");
 }
