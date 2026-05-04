@@ -1,0 +1,7 @@
+build/
+vendor/miniaudio.h
+vendor/stb_image.h
+*.o
+*.exe
+*.log
+*.stackdump
