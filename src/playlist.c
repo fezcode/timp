@@ -41,6 +41,22 @@ void playlist_add(Playlist* p, const char* path) {
     if (p->index < 0) p->index = 0;
 }
 
+bool playlist_remove(Playlist* p, int idx) {
+    if (idx < 0 || idx >= p->count) return false;
+    bool was_current = (idx == p->index);
+    free(p->paths[idx]);
+    for (int i = idx; i < p->count - 1; i++) p->paths[i] = p->paths[i+1];
+    p->count--;
+    if (p->count == 0) {
+        p->index = -1;
+    } else if (p->index >= p->count) {
+        p->index = p->count - 1;
+    } else if (p->index > idx) {
+        p->index--;
+    }
+    return was_current;
+}
+
 const char* playlist_current(const Playlist* p) {
     if (p->index < 0 || p->index >= p->count) return NULL;
     return p->paths[p->index];

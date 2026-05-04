@@ -18,6 +18,8 @@ void playlist_free(Playlist* p);
 void playlist_clear(Playlist* p);
 
 void playlist_add(Playlist* p, const char* path);
+// Removes the entry at idx. Returns true if the currently-playing track was removed.
+bool playlist_remove(Playlist* p, int idx);
 
 const char* playlist_current(const Playlist* p);
 bool playlist_has_next(const Playlist* p);

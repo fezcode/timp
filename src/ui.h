@@ -6,6 +6,7 @@
 #include "audio.h"
 #include "playlist.h"
 #include "filebrowser.h"
+#include "settings.h"
 
 typedef enum { VIZ_WAVE = 0, VIZ_SPECTRUM = 1 } VizMode;
 
@@ -32,12 +33,20 @@ typedef struct {
 
     // EQ modal state
     bool eq_open;
-    int eq_drag_band;  // -1 if not dragging a slider
+    int eq_drag_band;
+
+    // Settings modal state
+    Settings settings;
+
+    // Playlist visibility (host resizes window when this flips)
+    bool playlist_visible;
 } UI;
 
 typedef struct {
     bool quit_requested;
     bool minimize_requested;
+    bool aot_changed;          // host should call SDL_SetWindowAlwaysOnTop
+    bool playlist_vis_changed; // host should resize window
 } UiAction;
 
 void ui_init(UI* ui, SDL_Renderer* ren, Skin* skin);

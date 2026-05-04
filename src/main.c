@@ -121,13 +121,17 @@ int main(int argc, char** argv) {
 
     SDL_EventState(SDL_DROPFILE, SDL_ENABLE);
 
-    // Window-size juggling for the file browser: FB needs more room than the
-    // compact main player. Save the player's dimensions at startup, swap to a
-    // larger size while the browser is open, restore on close.
-    const int FB_WIN_W = 520, FB_WIN_H = 380;
+    // Window-size juggling. Three states:
+    //   modal (file browser or settings open) -> larger window
+    //   playlist visible                       -> compact + playlist
+    //   playlist hidden                        -> compact only
+    const int MODAL_WIN_W = 520, MODAL_WIN_H = 380;
+    const int PLAYER_NO_PL_H = 88;  // y where the playlist panel starts in default skin
     int orig_skin_w = skin.window_w;
-    int orig_skin_h = skin.window_h;
-    bool fb_was_open = false;
+    int orig_skin_h = skin.window_h;  // full height with playlist
+    bool was_modal = false;
+    bool was_pl_visible = ui.playlist_visible;
+    bool always_on_top = false;
 
     int last_pl_index = playlist_index(&pl);
     bool drop_active = false;
@@ -174,6 +178,10 @@ int main(int argc, char** argv) {
                     UiAction act = ui_handle_event(&ui, &e, audio, &pl);
                     if (act.quit_requested) running = 0;
                     if (act.minimize_requested) SDL_MinimizeWindow(win);
+                    if (act.aot_changed) {
+                        always_on_top = ui.settings.always_on_top;
+                        SDL_SetWindowAlwaysOnTop(win, always_on_top ? SDL_TRUE : SDL_FALSE);
+                    }
                     break;
                 }
             }
@@ -209,19 +217,26 @@ int main(int argc, char** argv) {
             update_titles(win, &ui, &pl);
         }
 
-        if (ui.fb.open != fb_was_open) {
-            if (ui.fb.open) {
-                SDL_SetWindowSize(win, FB_WIN_W, FB_WIN_H);
+        bool modal = ui.fb.open || ui.settings.open;
+        if (modal != was_modal) {
+            if (modal) {
+                SDL_SetWindowSize(win, MODAL_WIN_W, MODAL_WIN_H);
                 SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
-                skin.window_w = FB_WIN_W;
-                skin.window_h = FB_WIN_H;
+                skin.window_w = MODAL_WIN_W;
+                skin.window_h = MODAL_WIN_H;
             } else {
-                SDL_SetWindowSize(win, orig_skin_w, orig_skin_h);
+                int h = ui.playlist_visible ? orig_skin_h : PLAYER_NO_PL_H;
+                SDL_SetWindowSize(win, orig_skin_w, h);
                 SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
                 skin.window_w = orig_skin_w;
-                skin.window_h = orig_skin_h;
+                skin.window_h = h;
             }
-            fb_was_open = ui.fb.open;
+            was_modal = modal;
+        } else if (!modal && ui.playlist_visible != was_pl_visible) {
+            int h = ui.playlist_visible ? orig_skin_h : PLAYER_NO_PL_H;
+            SDL_SetWindowSize(win, orig_skin_w, h);
+            skin.window_h = h;
+            was_pl_visible = ui.playlist_visible;
         }
 
         ui_render(&ui, audio, &pl);

@@ -1,6 +1,7 @@
 #include "ui.h"
 #include "font.h"
 #include "fft.h"
+#include "theme.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -15,8 +16,10 @@ void ui_init(UI* ui, SDL_Renderer* ren, Skin* skin) {
     ui->spectrum_bar_count = 32;
     ui->pl_hover = -1;
     ui->eq_drag_band = -1;
+    ui->playlist_visible = true;
     snprintf(ui->display_title, sizeof(ui->display_title), "%s", "WHAMP - DROP A FILE");
     fb_init(&ui->fb);
+    settings_init(&ui->settings);
 }
 
 // ----- EQ panel layout -----
@@ -129,12 +132,21 @@ static UiAction fire_button(UI* ui, ButtonId id, Audio* audio, Playlist* pl) {
         case BTN_OPEN:
             fb_show(&ui->fb);
             break;
+        case BTN_EQ:
+            ui->eq_open = true;
+            break;
         case BTN_SHUFFLE:
             if (pl) playlist_set_shuffle(pl, !playlist_shuffle(pl));
             break;
         case BTN_LOOP:
             if (pl) playlist_set_loop(pl, !playlist_loop(pl));
             break;
+        case BTN_SETTINGS: {
+            // Mirror current state into the settings struct so toggles render correctly
+            ui->settings.playlist_visible = ui->playlist_visible;
+            settings_show(&ui->settings);
+            break;
+        }
         case BTN_MIN:   act.minimize_requested = true; break;
         case BTN_CLOSE: act.quit_requested = true; break;
         default: break;
@@ -203,6 +215,31 @@ UiAction ui_handle_event(UI* ui, const SDL_Event* e, Audio* audio, Playlist* pl)
         fb_handle_event(&ui->fb, e, ui->skin);
         return act;
     }
+    if (ui->settings.open) {
+        // Allow min/close on the title bar even while settings is open
+        if (e->type == SDL_MOUSEBUTTONDOWN && e->button.button == SDL_BUTTON_LEFT) {
+            int btn = skin_button_at(ui->skin, e->button.x, e->button.y);
+            if (btn == BTN_MIN)   { act.minimize_requested = true; return act; }
+            if (btn == BTN_CLOSE) { act.quit_requested = true;     return act; }
+        }
+        settings_handle_event(&ui->settings, e, ui->skin);
+
+        // Pull any changes out of settings.
+        if (ui->settings.theme_changed) {
+            theme_apply(ui->skin, ui->settings.current_theme);
+            ui->settings.theme_changed = false;
+        }
+        if (ui->settings.aot_changed) {
+            act.aot_changed = true;
+            ui->settings.aot_changed = false;
+        }
+        if (ui->settings.plv_changed) {
+            ui->playlist_visible = ui->settings.playlist_visible;
+            act.playlist_vis_changed = true;
+            ui->settings.plv_changed = false;
+        }
+        return act;
+    }
     if (ui->eq_open) {
         eq_handle_event(ui, e, audio, &act);
         return act;
@@ -235,8 +272,6 @@ UiAction ui_handle_event(UI* ui, const SDL_Event* e, Audio* audio, Playlist* pl)
         } else if (e->type == SDL_MOUSEBUTTONDOWN && e->button.button == SDL_BUTTON_LEFT) {
             int mx = e->button.x, my = e->button.y;
             if (mx >= rows.x && mx < rows.x + rows.w && my >= rows.y && my < rows.y + rows.h) {
-                // Single click: just consume (avoids the click falling through to
-                // the title bar / drag region). Double-click jumps to that track.
                 if (e->button.clicks >= 2) {
                     int row = (my - rows.y) / PL_ROW_H;
                     int idx = ui->pl_scroll + row;
@@ -244,6 +279,21 @@ UiAction ui_handle_event(UI* ui, const SDL_Event* e, Audio* audio, Playlist* pl)
                         playlist_set_index(pl, idx);
                         const char* path = playlist_current(pl);
                         if (path && audio_load(audio, path)) audio_play(audio);
+                    }
+                }
+                return act;
+            }
+        } else if (e->type == SDL_MOUSEBUTTONDOWN && e->button.button == SDL_BUTTON_RIGHT) {
+            int mx = e->button.x, my = e->button.y;
+            if (mx >= rows.x && mx < rows.x + rows.w && my >= rows.y && my < rows.y + rows.h) {
+                int row = (my - rows.y) / PL_ROW_H;
+                int idx = ui->pl_scroll + row;
+                if (idx >= 0 && idx < playlist_count(pl)) {
+                    bool removed_current = playlist_remove(pl, idx);
+                    if (removed_current) {
+                        const char* path = playlist_current(pl);
+                        if (path) load_and_play(audio, path);
+                        else audio_stop(audio);
                     }
                 }
                 return act;
@@ -319,6 +369,31 @@ UiAction ui_handle_event(UI* ui, const SDL_Event* e, Audio* audio, Playlist* pl)
             case SDLK_l:    if (pl) playlist_set_loop(pl, !playlist_loop(pl)); break;
             case SDLK_h:    if (pl) playlist_set_shuffle(pl, !playlist_shuffle(pl)); break;
             case SDLK_e:    ui->eq_open = true; break;
+            case SDLK_p:
+                ui->playlist_visible = !ui->playlist_visible;
+                ui->settings.playlist_visible = ui->playlist_visible;
+                act.playlist_vis_changed = true;
+                break;
+            case SDLK_t:
+                ui->settings.always_on_top = !ui->settings.always_on_top;
+                act.aot_changed = true;
+                break;
+            case SDLK_F2:
+                ui->settings.playlist_visible = ui->playlist_visible;
+                settings_show(&ui->settings);
+                break;
+            case SDLK_DELETE:
+            case SDLK_BACKSPACE: {
+                if (ui->pl_hover >= 0 && ui->pl_hover < playlist_count(pl)) {
+                    bool removed_current = playlist_remove(pl, ui->pl_hover);
+                    if (removed_current) {
+                        const char* path = playlist_current(pl);
+                        if (path) load_and_play(audio, path);
+                        else audio_stop(audio);
+                    }
+                }
+                break;
+            }
             default: break;
         }
     }
@@ -458,6 +533,35 @@ static void icon_min(SDL_Renderer* ren, SDL_Rect r, SDL_Color c) {
     fill_rect(ren, bar, c);
 }
 
+static void icon_eq(SDL_Renderer* ren, SDL_Rect r, SDL_Color c) {
+    int pad = 5;
+    int slots = 4;
+    int slot_w = (r.w - 2 * pad) / slots;
+    int top = r.y + pad;
+    int bot = r.y + r.h - pad;
+    SDL_SetRenderDrawColor(ren, c.r, c.g, c.b, c.a);
+    static const float heights[4] = { 0.4f, 0.7f, 0.5f, 0.85f };
+    for (int i = 0; i < slots; i++) {
+        int x = r.x + pad + i * slot_w + 1;
+        int h = (int)((bot - top) * heights[i]);
+        SDL_Rect bar = { x, bot - h, slot_w - 2, h };
+        SDL_RenderFillRect(ren, &bar);
+    }
+}
+
+static void icon_settings(SDL_Renderer* ren, SDL_Rect r, SDL_Color c) {
+    // Three horizontal lines (hamburger)
+    int pad_x = 3;
+    int spacing = (r.h - 2) / 4;
+    if (spacing < 2) spacing = 2;
+    int y = r.y + (r.h - spacing * 3) / 2;
+    SDL_SetRenderDrawColor(ren, c.r, c.g, c.b, c.a);
+    for (int i = 0; i < 3; i++) {
+        SDL_Rect bar = { r.x + pad_x, y + i * spacing, r.w - 2 * pad_x, 1 };
+        SDL_RenderFillRect(ren, &bar);
+    }
+}
+
 static void icon_close(SDL_Renderer* ren, SDL_Rect r, SDL_Color c) {
     SDL_SetRenderDrawColor(ren, c.r, c.g, c.b, c.a);
     int pad = 3;
@@ -541,8 +645,10 @@ static void render_button(UI* ui, ButtonId id, Playlist* pl) {
         case BTN_STOP:    icon_stop(ui->ren, hit, icon_color); break;
         case BTN_NEXT:    icon_next(ui->ren, hit, icon_color); break;
         case BTN_OPEN:    icon_open(ui->ren, hit, icon_color); break;
+        case BTN_EQ:      icon_eq(ui->ren, hit, icon_color); break;
         case BTN_SHUFFLE: icon_shuffle(ui->ren, hit, icon_color, pl ? playlist_shuffle(pl) : false); break;
         case BTN_LOOP:    icon_loop(ui->ren, hit, icon_color, pl ? playlist_loop(pl) : false); break;
+        case BTN_SETTINGS: icon_settings(ui->ren, hit, sk->theme_text); break;
         case BTN_MIN:     icon_min(ui->ren, hit, sk->theme_text); break;
         case BTN_CLOSE:   icon_close(ui->ren, hit, sk->theme_text); break;
         default: break;
@@ -865,6 +971,16 @@ void ui_render(UI* ui, Audio* audio, Playlist* pl) {
         SDL_RenderPresent(ui->ren);
         return;
     }
+    if (ui->settings.open) {
+        settings_render(&ui->settings, ui->ren, ui->skin);
+        // Title-bar min/close stay clickable above the settings panel
+        if (ui->skin->buttons[BTN_MIN].defined)
+            icon_min(ui->ren, ui->skin->buttons[BTN_MIN].hit, ui->skin->theme_text);
+        if (ui->skin->buttons[BTN_CLOSE].defined)
+            icon_close(ui->ren, ui->skin->buttons[BTN_CLOSE].hit, ui->skin->theme_text);
+        SDL_RenderPresent(ui->ren);
+        return;
+    }
     if (ui->eq_open) {
         render_eq(ui, audio);
         SDL_RenderPresent(ui->ren);
@@ -887,7 +1003,7 @@ void ui_render(UI* ui, Audio* audio, Playlist* pl) {
     render_time(ui, audio);
     render_title(ui);
     render_viz(ui, audio);
-    render_playlist(ui, pl);
+    if (ui->playlist_visible) render_playlist(ui, pl);
 
     SDL_RenderPresent(ui->ren);
 }

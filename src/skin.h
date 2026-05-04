@@ -11,8 +11,10 @@ typedef enum {
     BTN_STOP,
     BTN_NEXT,
     BTN_OPEN,
+    BTN_EQ,
     BTN_SHUFFLE,
     BTN_LOOP,
+    BTN_SETTINGS,
     BTN_MIN,
     BTN_CLOSE,
     BTN_COUNT

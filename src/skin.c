@@ -10,8 +10,8 @@
 static const char* btn_section[BTN_COUNT] = {
     "button.prev", "button.play", "button.pause",
     "button.stop", "button.next", "button.open",
-    "button.shuffle", "button.loop",
-    "button.min", "button.close"
+    "button.eq", "button.shuffle", "button.loop",
+    "button.settings", "button.min", "button.close"
 };
 
 static SDL_Color make_color(unsigned char r, unsigned char g, unsigned char b, unsigned char a) {
@@ -25,12 +25,13 @@ void skin_default(Skin* skin) {
     skin->window_w = 300;
     skin->window_h = 188;
 
-    // Title bar / drag region
-    skin->drag_region.rect = (SDL_Rect){ 0, 0, 268, 14 };
+    // Title bar / drag region (settings + min + close on the right)
+    skin->drag_region.rect = (SDL_Rect){ 0, 0, 252, 14 };
     skin->drag_region.defined = true;
 
-    skin->buttons[BTN_MIN].hit   = (SDL_Rect){ 268, 2, 14, 10 };
-    skin->buttons[BTN_CLOSE].hit = (SDL_Rect){ 284, 2, 14, 10 };
+    skin->buttons[BTN_SETTINGS].hit = (SDL_Rect){ 252, 2, 14, 10 };
+    skin->buttons[BTN_MIN].hit      = (SDL_Rect){ 268, 2, 14, 10 };
+    skin->buttons[BTN_CLOSE].hit    = (SDL_Rect){ 284, 2, 14, 10 };
 
     // Display elements
     skin->title.rect      = (SDL_Rect){ 6, 16, 288, 9 };
@@ -62,6 +63,8 @@ void skin_default(Skin* skin) {
     skin->buttons[BTN_STOP].hit  = (SDL_Rect){ xs + 3*(w+gap), y, w, h };
     skin->buttons[BTN_NEXT].hit  = (SDL_Rect){ xs + 4*(w+gap), y, w, h };
     skin->buttons[BTN_OPEN].hit  = (SDL_Rect){ xs + 5*(w+gap), y, w, h };
+    // Right-side cluster: EQ, SHUFFLE, LOOP — three same-width buttons against the right edge
+    skin->buttons[BTN_EQ].hit      = (SDL_Rect){ skin->window_w - 6 - 3*(w+gap) + gap, y, w, h };
     skin->buttons[BTN_SHUFFLE].hit = (SDL_Rect){ skin->window_w - 6 - 2*(w+gap) + gap, y, w, h };
     skin->buttons[BTN_LOOP].hit    = (SDL_Rect){ skin->window_w - 6 - (w+gap) + gap, y, w, h };
     for (int i = 0; i < BTN_COUNT; i++) {
