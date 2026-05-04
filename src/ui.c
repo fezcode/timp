@@ -235,12 +235,16 @@ UiAction ui_handle_event(UI* ui, const SDL_Event* e, Audio* audio, Playlist* pl)
         } else if (e->type == SDL_MOUSEBUTTONDOWN && e->button.button == SDL_BUTTON_LEFT) {
             int mx = e->button.x, my = e->button.y;
             if (mx >= rows.x && mx < rows.x + rows.w && my >= rows.y && my < rows.y + rows.h) {
-                int row = (my - rows.y) / PL_ROW_H;
-                int idx = ui->pl_scroll + row;
-                if (idx >= 0 && idx < playlist_count(pl)) {
-                    playlist_set_index(pl, idx);
-                    const char* path = playlist_current(pl);
-                    if (path && audio_load(audio, path)) audio_play(audio);
+                // Single click: just consume (avoids the click falling through to
+                // the title bar / drag region). Double-click jumps to that track.
+                if (e->button.clicks >= 2) {
+                    int row = (my - rows.y) / PL_ROW_H;
+                    int idx = ui->pl_scroll + row;
+                    if (idx >= 0 && idx < playlist_count(pl)) {
+                        playlist_set_index(pl, idx);
+                        const char* path = playlist_current(pl);
+                        if (path && audio_load(audio, path)) audio_play(audio);
+                    }
                 }
                 return act;
             }
