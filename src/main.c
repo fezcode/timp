@@ -121,6 +121,14 @@ int main(int argc, char** argv) {
 
     SDL_EventState(SDL_DROPFILE, SDL_ENABLE);
 
+    // Window-size juggling for the file browser: FB needs more room than the
+    // compact main player. Save the player's dimensions at startup, swap to a
+    // larger size while the browser is open, restore on close.
+    const int FB_WIN_W = 520, FB_WIN_H = 380;
+    int orig_skin_w = skin.window_w;
+    int orig_skin_h = skin.window_h;
+    bool fb_was_open = false;
+
     int last_pl_index = playlist_index(&pl);
     bool drop_active = false;
     bool drop_was_idle = false;       // was nothing loaded/playing when this drop started?
@@ -199,6 +207,21 @@ int main(int argc, char** argv) {
         if (playlist_index(&pl) != last_pl_index) {
             last_pl_index = playlist_index(&pl);
             update_titles(win, &ui, &pl);
+        }
+
+        if (ui.fb.open != fb_was_open) {
+            if (ui.fb.open) {
+                SDL_SetWindowSize(win, FB_WIN_W, FB_WIN_H);
+                SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+                skin.window_w = FB_WIN_W;
+                skin.window_h = FB_WIN_H;
+            } else {
+                SDL_SetWindowSize(win, orig_skin_w, orig_skin_h);
+                SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+                skin.window_w = orig_skin_w;
+                skin.window_h = orig_skin_h;
+            }
+            fb_was_open = ui.fb.open;
         }
 
         ui_render(&ui, audio, &pl);
