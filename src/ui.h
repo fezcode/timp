@@ -15,6 +15,7 @@ typedef struct {
     Skin* skin;
 
     int pressed_btn;
+    int hover_btn;
     bool dragging_pos;
     bool dragging_vol;
 
@@ -30,6 +31,10 @@ typedef struct {
     // playlist panel state
     int pl_scroll;
     int pl_hover;
+    int pl_drag_idx;       // index being dragged, -1 if none
+    int pl_drag_target;    // current target slot during drag
+    int pl_press_idx;      // row pressed on mouse-down (becomes drag if mouse moves)
+    int pl_press_x, pl_press_y;
 
     // EQ modal state
     bool eq_open;
@@ -47,6 +52,7 @@ typedef struct {
     bool minimize_requested;
     bool aot_changed;          // host should call SDL_SetWindowAlwaysOnTop
     bool playlist_vis_changed; // host should resize window
+    bool settings_changed;     // host should persist config
 } UiAction;
 
 void ui_init(UI* ui, SDL_Renderer* ren, Skin* skin);

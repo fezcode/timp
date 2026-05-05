@@ -7,6 +7,18 @@
 #include <SDL2/SDL.h>
 #include "../vendor/miniaudio.h"
 
+#ifdef _WIN32
+#include <windows.h>
+static wchar_t* audio_utf8_to_w(const char* s) {
+    int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
+    if (n <= 0) return NULL;
+    wchar_t* w = (wchar_t*)malloc(sizeof(wchar_t) * n);
+    if (!w) return NULL;
+    MultiByteToWideChar(CP_UTF8, 0, s, -1, w, n);
+    return w;
+}
+#endif
+
 struct Audio {
     ma_device device;
     ma_decoder decoder;
@@ -109,10 +121,25 @@ bool audio_load(Audio* a, const char* path) {
 
     ma_decoder_config dc = ma_decoder_config_init(ma_format_f32, a->device.playback.channels,
                                                   a->device.sampleRate);
+#ifdef _WIN32
+    // Path comes in as UTF-8 (from SDL drag-drop, file dialog, argv). The narrow
+    // ma_decoder_init_file uses fopen, which on Windows is ANSI — Unicode names fail.
+    wchar_t* wpath = audio_utf8_to_w(path);
+    ma_result mr = MA_ERROR;
+    if (wpath) {
+        mr = ma_decoder_init_file_w(wpath, &dc, &a->decoder);
+        free(wpath);
+    }
+    if (mr != MA_SUCCESS) {
+        fprintf(stderr, "audio: cannot decode %s\n", path);
+        return false;
+    }
+#else
     if (ma_decoder_init_file(path, &dc, &a->decoder) != MA_SUCCESS) {
         fprintf(stderr, "audio: cannot decode %s\n", path);
         return false;
     }
+#endif
     a->decoder_inited = true;
     snprintf(a->path, sizeof(a->path), "%s", path);
     return true;

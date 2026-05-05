@@ -7,6 +7,8 @@
 #include "skin.h"
 #include "ui.h"
 #include "playlist.h"
+#include "config.h"
+#include "theme.h"
 
 static const char* basename_only(const char* path) {
     const char* s = strrchr(path, '/');
@@ -46,7 +48,15 @@ static void load_current(Audio* audio, const Playlist* pl, bool start_playing) {
 static SDL_HitTestResult SDLCALL hittest_cb(SDL_Window* win, const SDL_Point* area, void* data) {
     (void)win;
     UI* ui = (UI*)data;
-    if (ui->fb.open) return SDL_HITTEST_NORMAL;
+    // Modal title bars: drag from the header band (above any tabs / list / buttons).
+    if (ui->fb.open) {
+        if (area->y < 22) return SDL_HITTEST_DRAGGABLE;
+        return SDL_HITTEST_NORMAL;
+    }
+    if (ui->settings.open) {
+        if (area->y < 16) return SDL_HITTEST_DRAGGABLE;
+        return SDL_HITTEST_NORMAL;
+    }
     if (skin_button_at(ui->skin, area->x, area->y) >= 0) return SDL_HITTEST_NORMAL;
     SDL_Rect r = ui->skin->drag_region.rect;
     if (ui->skin->drag_region.defined &&
@@ -103,10 +113,20 @@ int main(int argc, char** argv) {
     } else {
         printf("loaded skin: %s\n", skin.name);
     }
+
+    WhConfig cfg;
+    config_load(&cfg);
+    if (cfg.current_theme > 0 && cfg.current_theme < theme_count()) {
+        theme_apply(&skin, cfg.current_theme);
+    }
     SDL_SetWindowSize(win, skin.window_w, skin.window_h);
 
     UI ui;
     ui_init(&ui, ren, &skin);
+    ui.settings.always_on_top    = cfg.always_on_top;
+    ui.settings.playlist_visible = cfg.playlist_visible;
+    ui.settings.current_theme    = cfg.current_theme;
+    ui.playlist_visible          = cfg.playlist_visible;
 
     SDL_SetWindowHitTest(win, hittest_cb, &ui);
 
@@ -129,9 +149,12 @@ int main(int argc, char** argv) {
     const int PLAYER_NO_PL_H = 88;  // y where the playlist panel starts in default skin
     int orig_skin_w = skin.window_w;
     int orig_skin_h = skin.window_h;  // full height with playlist
+    SDL_Rect orig_btn_min   = skin.buttons[BTN_MIN].hit;
+    SDL_Rect orig_btn_close = skin.buttons[BTN_CLOSE].hit;
     bool was_modal = false;
     bool was_pl_visible = ui.playlist_visible;
-    bool always_on_top = false;
+    bool always_on_top = cfg.always_on_top;
+    if (always_on_top) SDL_SetWindowAlwaysOnTop(win, SDL_TRUE);
 
     int last_pl_index = playlist_index(&pl);
     bool drop_active = false;
@@ -182,6 +205,12 @@ int main(int argc, char** argv) {
                         always_on_top = ui.settings.always_on_top;
                         SDL_SetWindowAlwaysOnTop(win, always_on_top ? SDL_TRUE : SDL_FALSE);
                     }
+                    if (act.settings_changed) {
+                        cfg.always_on_top    = ui.settings.always_on_top;
+                        cfg.playlist_visible = ui.settings.playlist_visible;
+                        cfg.current_theme    = ui.settings.current_theme;
+                        config_save(&cfg);
+                    }
                     break;
                 }
             }
@@ -218,30 +247,51 @@ int main(int argc, char** argv) {
         }
 
         bool modal = ui.fb.open || ui.settings.open;
-        if (modal != was_modal) {
-            if (modal) {
-                SDL_SetWindowSize(win, MODAL_WIN_W, MODAL_WIN_H);
-                SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
-                skin.window_w = MODAL_WIN_W;
-                skin.window_h = MODAL_WIN_H;
-            } else {
-                int h = ui.playlist_visible ? orig_skin_h : PLAYER_NO_PL_H;
-                SDL_SetWindowSize(win, orig_skin_w, h);
-                SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
-                skin.window_w = orig_skin_w;
-                skin.window_h = h;
-            }
-            was_modal = modal;
-        } else if (!modal && ui.playlist_visible != was_pl_visible) {
-            int h = ui.playlist_visible ? orig_skin_h : PLAYER_NO_PL_H;
-            SDL_SetWindowSize(win, orig_skin_w, h);
-            skin.window_h = h;
-            was_pl_visible = ui.playlist_visible;
+        // Compute the expected window size for the current state.
+        int want_w, want_h;
+        if (modal) {
+            want_w = MODAL_WIN_W;
+            want_h = MODAL_WIN_H;
+        } else {
+            want_w = orig_skin_w;
+            want_h = ui.playlist_visible ? orig_skin_h : PLAYER_NO_PL_H;
         }
+
+        if (modal != was_modal) {
+            // State change: anchor title-bar buttons to the new layout, recenter,
+            // and update the skin's logical size used by renderers.
+            if (modal) {
+                skin.buttons[BTN_CLOSE].hit = (SDL_Rect){ MODAL_WIN_W - 16, 2, 14, 10 };
+                skin.buttons[BTN_MIN].hit   = (SDL_Rect){ MODAL_WIN_W - 32, 2, 14, 10 };
+            } else {
+                skin.buttons[BTN_MIN].hit   = orig_btn_min;
+                skin.buttons[BTN_CLOSE].hit = orig_btn_close;
+            }
+            SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+            was_modal = modal;
+        }
+
+        // Defensively re-assert the window size every frame. SDL_SetWindowSize on
+        // borderless Windows occasionally drops a shrink request, leaving the player
+        // UI floating in a too-large window — querying the actual size and re-issuing
+        // the request when it disagrees keeps state coherent.
+        int actual_w = 0, actual_h = 0;
+        SDL_GetWindowSize(win, &actual_w, &actual_h);
+        if (actual_w != want_w || actual_h != want_h) {
+            SDL_SetWindowSize(win, want_w, want_h);
+        }
+        skin.window_w = want_w;
+        skin.window_h = want_h;
+        was_pl_visible = ui.playlist_visible;
 
         ui_render(&ui, audio, &pl);
         SDL_Delay(16);
     }
+
+    cfg.always_on_top    = ui.settings.always_on_top;
+    cfg.playlist_visible = ui.settings.playlist_visible;
+    cfg.current_theme    = ui.settings.current_theme;
+    config_save(&cfg);
 
     audio_destroy(audio);
     ui_destroy(&ui);

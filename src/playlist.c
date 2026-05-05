@@ -57,6 +57,28 @@ bool playlist_remove(Playlist* p, int idx) {
     return was_current;
 }
 
+void playlist_move(Playlist* p, int from, int to) {
+    if (from < 0 || from >= p->count) return;
+    if (to < 0) to = 0;
+    if (to >= p->count) to = p->count - 1;
+    if (from == to) return;
+
+    char* moved = p->paths[from];
+    if (from < to) {
+        for (int i = from; i < to; i++) p->paths[i] = p->paths[i + 1];
+    } else {
+        for (int i = from; i > to; i--) p->paths[i] = p->paths[i - 1];
+    }
+    p->paths[to] = moved;
+
+    // Keep the current track's identity stable across the reorder.
+    int cur = p->index;
+    if (cur == from)            cur = to;
+    else if (from < cur && cur <= to) cur--;
+    else if (to <= cur && cur < from) cur++;
+    p->index = cur;
+}
+
 const char* playlist_current(const Playlist* p) {
     if (p->index < 0 || p->index >= p->count) return NULL;
     return p->paths[p->index];

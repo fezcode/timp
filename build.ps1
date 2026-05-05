@@ -23,7 +23,7 @@ $winLibs = '-lole32','-lwinmm','-lm'
 
 New-Item -ItemType Directory -Force -Path build | Out-Null
 
-$srcs = 'main','audio','skin','ui','ini','font','playlist','filebrowser','fft','eq','theme','settings','vendor'
+$srcs = 'main','audio','skin','ui','ini','font','playlist','filebrowser','fft','eq','theme','settings','config','vendor'
 foreach ($s in $srcs) {
     $src = "src\$s.c"
     $obj = "build\$s.o"

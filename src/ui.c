@@ -12,9 +12,13 @@ void ui_init(UI* ui, SDL_Renderer* ren, Skin* skin) {
     ui->ren = ren;
     ui->skin = skin;
     ui->pressed_btn = -1;
+    ui->hover_btn = -1;
     ui->viz_mode = VIZ_WAVE;
     ui->spectrum_bar_count = 32;
     ui->pl_hover = -1;
+    ui->pl_drag_idx = -1;
+    ui->pl_drag_target = -1;
+    ui->pl_press_idx = -1;
     ui->eq_drag_band = -1;
     ui->playlist_visible = true;
     snprintf(ui->display_title, sizeof(ui->display_title), "%s", "WHAMP - DROP A FILE");
@@ -228,15 +232,18 @@ UiAction ui_handle_event(UI* ui, const SDL_Event* e, Audio* audio, Playlist* pl)
         if (ui->settings.theme_changed) {
             theme_apply(ui->skin, ui->settings.current_theme);
             ui->settings.theme_changed = false;
+            act.settings_changed = true;
         }
         if (ui->settings.aot_changed) {
             act.aot_changed = true;
             ui->settings.aot_changed = false;
+            act.settings_changed = true;
         }
         if (ui->settings.plv_changed) {
             ui->playlist_visible = ui->settings.playlist_visible;
             act.playlist_vis_changed = true;
             ui->settings.plv_changed = false;
+            act.settings_changed = true;
         }
         return act;
     }
@@ -252,14 +259,39 @@ UiAction ui_handle_event(UI* ui, const SDL_Event* e, Audio* audio, Playlist* pl)
         SDL_Rect plr = sk->playlist_rect.rect;
         SDL_Rect rows = { plr.x, plr.y + PL_HEADER_H, plr.w, plr.h - PL_HEADER_H };
         int rows_visible = pl_visible_rows(sk);
+        const int X_W = 12;  // width of the [x] hit zone at the right of each row
 
         if (e->type == SDL_MOUSEMOTION) {
             int mx = e->motion.x, my = e->motion.y;
-            ui->pl_hover = -1;
+            int row_under = -1;
             if (mx >= rows.x && mx < rows.x + rows.w && my >= rows.y && my < rows.y + rows.h) {
                 int row = (my - rows.y) / PL_ROW_H;
                 int idx = ui->pl_scroll + row;
-                if (idx >= 0 && idx < playlist_count(pl)) ui->pl_hover = idx;
+                if (idx >= 0 && idx < playlist_count(pl)) row_under = idx;
+            }
+            ui->pl_hover = (ui->pl_drag_idx >= 0) ? -1 : row_under;
+
+            // Promote a press into a drag once the mouse moves more than a few pixels.
+            if (ui->pl_drag_idx < 0 && ui->pl_press_idx >= 0) {
+                int dx = mx - ui->pl_press_x;
+                int dy = my - ui->pl_press_y;
+                if (dx*dx + dy*dy > 16) {
+                    ui->pl_drag_idx = ui->pl_press_idx;
+                    ui->pl_drag_target = ui->pl_press_idx;
+                }
+            }
+            if (ui->pl_drag_idx >= 0) {
+                // Map to drop slot: clamp so we can drop at the very end.
+                int target;
+                if (my < rows.y) target = ui->pl_scroll;
+                else if (my >= rows.y + rows_visible * PL_ROW_H) target = playlist_count(pl) - 1;
+                else {
+                    int row = (my - rows.y) / PL_ROW_H;
+                    target = ui->pl_scroll + row;
+                }
+                if (target < 0) target = 0;
+                if (target >= playlist_count(pl)) target = playlist_count(pl) - 1;
+                ui->pl_drag_target = target;
             }
         } else if (e->type == SDL_MOUSEWHEEL) {
             int mx, my;
@@ -272,17 +304,45 @@ UiAction ui_handle_event(UI* ui, const SDL_Event* e, Audio* audio, Playlist* pl)
         } else if (e->type == SDL_MOUSEBUTTONDOWN && e->button.button == SDL_BUTTON_LEFT) {
             int mx = e->button.x, my = e->button.y;
             if (mx >= rows.x && mx < rows.x + rows.w && my >= rows.y && my < rows.y + rows.h) {
-                if (e->button.clicks >= 2) {
-                    int row = (my - rows.y) / PL_ROW_H;
-                    int idx = ui->pl_scroll + row;
-                    if (idx >= 0 && idx < playlist_count(pl)) {
-                        playlist_set_index(pl, idx);
+                int row = (my - rows.y) / PL_ROW_H;
+                int idx = ui->pl_scroll + row;
+                if (idx < 0 || idx >= playlist_count(pl)) return act;
+
+                // Click on the [x] zone removes the row.
+                int x_left = rows.x + rows.w - X_W - 4;
+                if (mx >= x_left) {
+                    bool removed_current = playlist_remove(pl, idx);
+                    if (removed_current) {
                         const char* path = playlist_current(pl);
-                        if (path && audio_load(audio, path)) audio_play(audio);
+                        if (path) load_and_play(audio, path);
+                        else audio_stop(audio);
                     }
+                    if (ui->pl_hover >= playlist_count(pl)) ui->pl_hover = -1;
+                    return act;
                 }
+
+                if (e->button.clicks >= 2) {
+                    playlist_set_index(pl, idx);
+                    const char* path = playlist_current(pl);
+                    if (path && audio_load(audio, path)) audio_play(audio);
+                    return act;
+                }
+
+                // Single press → arm a potential drag (committed once mouse moves).
+                ui->pl_press_idx = idx;
+                ui->pl_press_x = mx;
+                ui->pl_press_y = my;
                 return act;
             }
+        } else if (e->type == SDL_MOUSEBUTTONUP && e->button.button == SDL_BUTTON_LEFT) {
+            if (ui->pl_drag_idx >= 0) {
+                int from = ui->pl_drag_idx;
+                int to   = ui->pl_drag_target;
+                if (to >= 0 && from != to) playlist_move(pl, from, to);
+            }
+            ui->pl_drag_idx = -1;
+            ui->pl_drag_target = -1;
+            ui->pl_press_idx = -1;
         } else if (e->type == SDL_MOUSEBUTTONDOWN && e->button.button == SDL_BUTTON_RIGHT) {
             int mx = e->button.x, my = e->button.y;
             if (mx >= rows.x && mx < rows.x + rows.w && my >= rows.y && my < rows.y + rows.h) {
@@ -339,6 +399,7 @@ UiAction ui_handle_event(UI* ui, const SDL_Event* e, Audio* audio, Playlist* pl)
         ui->dragging_vol = false;
     } else if (e->type == SDL_MOUSEMOTION) {
         int mx = e->motion.x;
+        ui->hover_btn = skin_button_at(sk, e->motion.x, e->motion.y);
         if (ui->dragging_pos && sk->pos_slider.defined) {
             double len = audio_length_seconds(audio);
             if (len > 0) {
@@ -373,10 +434,12 @@ UiAction ui_handle_event(UI* ui, const SDL_Event* e, Audio* audio, Playlist* pl)
                 ui->playlist_visible = !ui->playlist_visible;
                 ui->settings.playlist_visible = ui->playlist_visible;
                 act.playlist_vis_changed = true;
+                act.settings_changed = true;
                 break;
             case SDLK_t:
                 ui->settings.always_on_top = !ui->settings.always_on_top;
                 act.aot_changed = true;
+                act.settings_changed = true;
                 break;
             case SDLK_F2:
                 ui->settings.playlist_visible = ui->playlist_visible;
@@ -413,6 +476,40 @@ static void draw_rect(SDL_Renderer* ren, SDL_Rect r, SDL_Color c) {
 static SDL_Color dim(SDL_Color c, float k) {
     SDL_Color o = { (Uint8)(c.r * k), (Uint8)(c.g * k), (Uint8)(c.b * k), c.a };
     return o;
+}
+static SDL_Color lighten(SDL_Color c, float k) {
+    int r = (int)(c.r + (255 - c.r) * k);
+    int g = (int)(c.g + (255 - c.g) * k);
+    int b = (int)(c.b + (255 - c.b) * k);
+    SDL_Color o = { (Uint8)(r > 255 ? 255 : r), (Uint8)(g > 255 ? 255 : g), (Uint8)(b > 255 ? 255 : b), c.a };
+    return o;
+}
+// Beveled rect: vertical-gradient face + bright top/left edge + dark bottom/right edge.
+// `recess` inverts the bevel (pressed state).
+static void draw_bevel(SDL_Renderer* ren, SDL_Rect r, SDL_Color face, SDL_Color edge, bool recess) {
+    SDL_Color top    = recess ? dim(face, 0.55f)     : lighten(face, 0.30f);
+    SDL_Color bot    = recess ? lighten(face, 0.20f) : dim(face, 0.65f);
+    SDL_Color hi     = recess ? dim(edge, 0.40f)     : lighten(edge, 0.45f);
+    SDL_Color lo     = recess ? lighten(edge, 0.30f) : dim(edge, 0.45f);
+
+    // Vertical gradient face — three bands keeps the cost trivial at 28x22.
+    int h1 = r.h / 3;
+    int h2 = r.h / 3;
+    SDL_Rect b1 = { r.x + 1, r.y + 1,           r.w - 2, h1 };
+    SDL_Rect b2 = { r.x + 1, r.y + 1 + h1,      r.w - 2, h2 };
+    SDL_Rect b3 = { r.x + 1, r.y + 1 + h1 + h2, r.w - 2, r.h - 2 - h1 - h2 };
+    fill_rect(ren, b1, top);
+    fill_rect(ren, b2, face);
+    fill_rect(ren, b3, bot);
+
+    // Outer border + inner highlight/shadow on two sides.
+    draw_rect(ren, r, dim(edge, 0.6f));
+    SDL_SetRenderDrawColor(ren, hi.r, hi.g, hi.b, 255);
+    SDL_RenderDrawLine(ren, r.x + 1, r.y + 1, r.x + r.w - 2, r.y + 1);              // top
+    SDL_RenderDrawLine(ren, r.x + 1, r.y + 1, r.x + 1, r.y + r.h - 2);              // left
+    SDL_SetRenderDrawColor(ren, lo.r, lo.g, lo.b, 255);
+    SDL_RenderDrawLine(ren, r.x + 1, r.y + r.h - 2, r.x + r.w - 2, r.y + r.h - 2);  // bottom
+    SDL_RenderDrawLine(ren, r.x + r.w - 2, r.y + 1, r.x + r.w - 2, r.y + r.h - 2);  // right
 }
 
 // Draw a filled triangle by row-scanning between two edges.
@@ -615,6 +712,7 @@ static void render_button(UI* ui, ButtonId id, Playlist* pl) {
     if (!btn->defined) return;
 
     bool pressed = (ui->pressed_btn == (int)id);
+    bool hovered = (ui->hover_btn == (int)id) && !pressed;
     SDL_Rect hit = btn->hit;
 
     if (sk->bg_tex && (btn->normal.w > 0 || btn->pressed.w > 0)) {
@@ -625,18 +723,21 @@ static void render_button(UI* ui, ButtonId id, Playlist* pl) {
         }
     }
 
-    // procedural button: rounded-corner-ish (just rect for now) + icon overlay
     SDL_Color face = sk->theme_panel;
     SDL_Color edge = sk->theme_accent;
-    if (pressed) face = dim(face, 0.55f);
+    if (hovered) face = lighten(face, 0.18f);
 
-    if (id != BTN_MIN && id != BTN_CLOSE) {
-        fill_rect(ui->ren, hit, face);
-        draw_rect(ui->ren, hit, edge);
+    bool tiny_titlebar = (id == BTN_MIN || id == BTN_CLOSE || id == BTN_SETTINGS);
+    if (!tiny_titlebar) {
+        draw_bevel(ui->ren, hit, face, edge, pressed);
+    } else if (hovered) {
+        // subtle hover hint for tiny title-bar icons
+        fill_rect(ui->ren, hit, dim(sk->theme_accent, 0.18f));
     }
 
     SDL_Color icon_color = sk->theme_accent;
-    if (pressed) icon_color = dim(icon_color, 0.7f);
+    if (pressed) icon_color = dim(icon_color, 0.6f);
+    else if (hovered) icon_color = lighten(icon_color, 0.2f);
 
     switch (id) {
         case BTN_PREV:    icon_prev(ui->ren, hit, icon_color); break;
@@ -809,6 +910,7 @@ static void render_playlist(UI* ui, Playlist* pl) {
     ui->pl_scroll = pl_clamp_scroll(ui->pl_scroll, total, rows_visible);
 
     int cur = playlist_index(pl);
+    const int X_W = 12;  // [x] zone on the right of each row
     for (int row = 0; row < rows_visible; row++) {
         int idx = ui->pl_scroll + row;
         if (idx >= total) break;
@@ -816,10 +918,15 @@ static void render_playlist(UI* ui, Playlist* pl) {
 
         bool is_current = (idx == cur);
         bool is_hover   = (idx == ui->pl_hover);
+        bool is_dragged = (idx == ui->pl_drag_idx);
         if (is_current) {
             fill_rect(ui->ren, rrow, dim(sk->theme_accent, 0.18f));
         } else if (is_hover) {
             fill_rect(ui->ren, rrow, dim(sk->theme_panel, 0.7f));
+        }
+        if (is_dragged) {
+            // dim the row that's being lifted
+            fill_rect(ui->ren, rrow, (SDL_Color){0, 0, 0, 120});
         }
 
         char num[8];
@@ -831,7 +938,7 @@ static void render_playlist(UI* ui, Playlist* pl) {
         const char* name = pl_basename(path);
         char shown[256];
         snprintf(shown, sizeof(shown), "%s", name);
-        int max_chars = (rrow.w - 28 - 6) / (FONT_W + 1);
+        int max_chars = (rrow.w - 28 - X_W - 8) / (FONT_W + 1);
         if ((int)strlen(shown) > max_chars && max_chars > 3) {
             shown[max_chars - 3] = '.';
             shown[max_chars - 2] = '.';
@@ -840,6 +947,29 @@ static void render_playlist(UI* ui, Playlist* pl) {
         }
         SDL_Color name_color = is_current ? sk->theme_accent : sk->theme_text;
         font_draw(ui->ren, rrow.x + 22, rrow.y + (rrow.h - FONT_H) / 2, 1, name_color, shown);
+
+        // [x] remove icon — visible on the hovered row.
+        if (is_hover && ui->pl_drag_idx < 0) {
+            int xc = rrow.x + rrow.w - X_W / 2 - 4;
+            int yc = rrow.y + rrow.h / 2;
+            SDL_Color xc_col = dim(sk->theme_text, 0.85f);
+            SDL_SetRenderDrawColor(ui->ren, xc_col.r, xc_col.g, xc_col.b, 255);
+            for (int d = -3; d <= 3; d++) {
+                SDL_RenderDrawPoint(ui->ren, xc + d, yc + d);
+                SDL_RenderDrawPoint(ui->ren, xc + d, yc - d);
+            }
+        }
+    }
+
+    // Insertion-line indicator while dragging.
+    if (ui->pl_drag_idx >= 0 && ui->pl_drag_target >= 0) {
+        int t = ui->pl_drag_target;
+        if (t >= ui->pl_scroll && t < ui->pl_scroll + rows_visible) {
+            int line_y = rows_rect.y + (t - ui->pl_scroll) * PL_ROW_H;
+            if (ui->pl_drag_target > ui->pl_drag_idx) line_y += PL_ROW_H;  // drop below
+            SDL_Rect line = { rows_rect.x + 2, line_y - 1, rows_rect.w - 4, 2 };
+            fill_rect(ui->ren, line, sk->theme_accent);
+        }
     }
 
     // Scrollbar

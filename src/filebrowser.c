@@ -9,7 +9,29 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <direct.h>
+#include <wchar.h>
 #define WH_SEP '\\'
+
+// Windows file/dir APIs come in *A (ANSI) and *W (UTF-16) flavors. The *A flavors
+// silently mangle non-codepage chars (folder "BEATS¡" becomes "BEATS?" — and "?" is
+// then treated as a wildcard, breaking FindFirstFileA). SDL gives us UTF-8 paths,
+// so we route everything through the wide APIs and convert at the boundary.
+static wchar_t* utf8_to_w(const char* s) {
+    int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
+    if (n <= 0) return NULL;
+    wchar_t* w = (wchar_t*)malloc(sizeof(wchar_t) * n);
+    if (!w) return NULL;
+    MultiByteToWideChar(CP_UTF8, 0, s, -1, w, n);
+    return w;
+}
+static char* w_to_utf8(const wchar_t* w) {
+    int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
+    if (n <= 0) return NULL;
+    char* s = (char*)malloc(n);
+    if (!s) return NULL;
+    WideCharToMultiByte(CP_UTF8, 0, w, -1, s, n, NULL, NULL);
+    return s;
+}
 #else
 #include <dirent.h>
 #include <sys/stat.h>
@@ -67,11 +89,22 @@ static void fb_scan(FileBrowser* fb) {
     fb->scroll = 0;
     fb->hover = -1;
 
-    // ".." (unless at filesystem root)
 #ifdef _WIN32
-    if (strlen(fb->cwd) > 3 || (strlen(fb->cwd) == 3 && fb->cwd[1] != ':')) {
-        fb_push(fb, "..", true);
+    // Empty cwd means "drive picker" view: list all logical drives.
+    if (fb->cwd[0] == 0) {
+        DWORD mask = GetLogicalDrives();
+        for (int i = 0; i < 26; i++) {
+            if (mask & (1u << i)) {
+                char letter[4] = { (char)('A' + i), ':', 0, 0 };
+                fb_push(fb, letter, true);
+            }
+        }
+        qsort(fb->entries, fb->n_entries, sizeof(FbEntry), cmp_entry);
+        fb->anchor = -1;
+        return;
     }
+    // ".." is always available when inside a drive (jumps to drive picker at root).
+    fb_push(fb, "..", true);
 #else
     if (strcmp(fb->cwd, "/") != 0) fb_push(fb, "..", true);
 #endif
@@ -79,17 +112,23 @@ static void fb_scan(FileBrowser* fb) {
 #ifdef _WIN32
     char pat[FB_PATH_MAX + 4];
     snprintf(pat, sizeof(pat), "%s\\*", fb->cwd);
-    WIN32_FIND_DATAA fd;
-    HANDLE h = FindFirstFileA(pat, &fd);
-    if (h != INVALID_HANDLE_VALUE) {
-        do {
-            if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0) continue;
-            if (fd.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN) continue;
-            bool is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-            if (!is_dir && !is_audio_file(fd.cFileName)) continue;
-            fb_push(fb, fd.cFileName, is_dir);
-        } while (FindNextFileA(h, &fd));
-        FindClose(h);
+    wchar_t* wpat = utf8_to_w(pat);
+    if (wpat) {
+        WIN32_FIND_DATAW fd;
+        HANDLE h = FindFirstFileW(wpat, &fd);
+        if (h != INVALID_HANDLE_VALUE) {
+            do {
+                if (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0) continue;
+                if (fd.dwFileAttributes & FILE_ATTRIBUTE_HIDDEN) continue;
+                bool is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+                char* uname = w_to_utf8(fd.cFileName);
+                if (!uname) continue;
+                if (is_dir || is_audio_file(uname)) fb_push(fb, uname, is_dir);
+                free(uname);
+            } while (FindNextFileW(h, &fd));
+            FindClose(h);
+        }
+        free(wpat);
     }
 #else
     DIR* d = opendir(fb->cwd);
@@ -115,6 +154,17 @@ static void fb_scan(FileBrowser* fb) {
 }
 
 static void fb_navigate(FileBrowser* fb, const char* name) {
+#ifdef _WIN32
+    // Drive-picker view: clicking "X:" enters that drive's root.
+    if (fb->cwd[0] == 0) {
+        size_t ln = strlen(name);
+        if (ln == 2 && name[1] == ':') {
+            snprintf(fb->cwd, sizeof(fb->cwd), "%s\\", name);
+            fb_scan(fb);
+        }
+        return;
+    }
+#endif
     if (strcmp(name, "..") == 0) {
 #ifdef _WIN32
         size_t n = strlen(fb->cwd);
@@ -122,6 +172,9 @@ static void fb_navigate(FileBrowser* fb, const char* name) {
             char* sep = strrchr(fb->cwd, '\\');
             if (sep && sep > fb->cwd + 2) *sep = 0;
             else fb->cwd[3] = 0;  // X:\.
+        } else {
+            // At drive root → exit to drive picker.
+            fb->cwd[0] = 0;
         }
 #else
         char* sep = strrchr(fb->cwd, '/');
@@ -138,23 +191,117 @@ static void fb_navigate(FileBrowser* fb, const char* name) {
     fb_scan(fb);
 }
 
+static bool fb_dir_exists(const char* path) {
+#ifdef _WIN32
+    wchar_t* w = utf8_to_w(path);
+    if (!w) return false;
+    DWORD a = GetFileAttributesW(w);
+    free(w);
+    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
+#else
+    struct stat st;
+    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+#endif
+}
+
+static bool fb_path_is_file(const char* path) {
+#ifdef _WIN32
+    wchar_t* w = utf8_to_w(path);
+    if (!w) return false;
+    DWORD a = GetFileAttributesW(w);
+    free(w);
+    return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
+#else
+    struct stat st;
+    return stat(path, &st) == 0 && S_ISREG(st.st_mode);
+#endif
+}
+
+static void fb_path_edit_begin(FileBrowser* fb) {
+    fb->path_edit = true;
+    snprintf(fb->path_buf, sizeof(fb->path_buf), "%s", fb->cwd);
+    SDL_StartTextInput();
+}
+
+static void fb_path_edit_end(FileBrowser* fb) {
+    fb->path_edit = false;
+    SDL_StopTextInput();
+}
+
+static void fb_commit_typed_path(FileBrowser* fb) {
+    // trim trailing whitespace
+    size_t n = strlen(fb->path_buf);
+    while (n > 0 && (fb->path_buf[n-1] == ' ' || fb->path_buf[n-1] == '\t')) {
+        fb->path_buf[--n] = 0;
+    }
+    if (n == 0) { fb_path_edit_end(fb); return; }
+
+    if (fb_dir_exists(fb->path_buf)) {
+        snprintf(fb->cwd, sizeof(fb->cwd), "%s", fb->path_buf);
+        size_t cn = strlen(fb->cwd);
+#ifdef _WIN32
+        // Strip trailing slash unless it's a drive root like "C:\".
+        if (cn > 3 && (fb->cwd[cn-1] == '\\' || fb->cwd[cn-1] == '/')) fb->cwd[cn-1] = 0;
+#else
+        if (cn > 1 && fb->cwd[cn-1] == '/') fb->cwd[cn-1] = 0;
+#endif
+        fb_path_edit_end(fb);
+        fb_scan(fb);
+    } else if (fb_path_is_file(fb->path_buf) && is_audio_file(fb->path_buf)) {
+        snprintf(fb->result_paths[0], sizeof(fb->result_paths[0]), "%s", fb->path_buf);
+        fb->result_count = 1;
+        fb->result_ready = true;
+        fb_path_edit_end(fb);
+        fb_close(fb);
+    }
+    // Otherwise invalid — stay in edit mode so user can fix it.
+}
+
 void fb_init(FileBrowser* fb) {
     memset(fb, 0, sizeof(*fb));
     fb->hover = -1;
     fb->anchor = -1;
+    fb->cwd[0] = 0;
+
 #ifdef _WIN32
-    char buf[FB_PATH_MAX];
-    if (_getcwd(buf, sizeof(buf))) {
-        snprintf(fb->cwd, sizeof(fb->cwd), "%s", buf);
-    } else {
-        snprintf(fb->cwd, sizeof(fb->cwd), "%s", "C:\\");
+    {
+        const wchar_t* upw = _wgetenv(L"USERPROFILE");
+        if (upw && *upw) {
+            wchar_t wmusic[FB_PATH_MAX];
+            _snwprintf(wmusic, FB_PATH_MAX, L"%ls\\Music", upw);
+            DWORD a = GetFileAttributesW(wmusic);
+            const wchar_t* pick = NULL;
+            if (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY)) pick = wmusic;
+            else {
+                a = GetFileAttributesW(upw);
+                if (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY)) pick = upw;
+            }
+            if (pick) {
+                char* u = w_to_utf8(pick);
+                if (u) { snprintf(fb->cwd, sizeof(fb->cwd), "%s", u); free(u); }
+            }
+        }
+        if (!fb->cwd[0]) {
+            wchar_t wbuf[FB_PATH_MAX];
+            if (_wgetcwd(wbuf, FB_PATH_MAX)) {
+                char* u = w_to_utf8(wbuf);
+                if (u) { snprintf(fb->cwd, sizeof(fb->cwd), "%s", u); free(u); }
+            }
+            if (!fb->cwd[0]) snprintf(fb->cwd, sizeof(fb->cwd), "%s", "C:\\");
+        }
     }
 #else
-    char buf[FB_PATH_MAX];
-    if (getcwd(buf, sizeof(buf))) {
-        snprintf(fb->cwd, sizeof(fb->cwd), "%s", buf);
-    } else {
-        snprintf(fb->cwd, sizeof(fb->cwd), "%s", "/");
+    const char* home = getenv("HOME");
+    if (home && *home) {
+        char tmp[FB_PATH_MAX];
+        snprintf(tmp, sizeof(tmp), "%s/Music", home);
+        if (fb_dir_exists(tmp))         snprintf(fb->cwd, sizeof(fb->cwd), "%s", tmp);
+        else if (fb_dir_exists(home))   snprintf(fb->cwd, sizeof(fb->cwd), "%s", home);
+    }
+    if (!fb->cwd[0]) {
+        char buf[FB_PATH_MAX];
+        if (getcwd(buf, sizeof(buf))) snprintf(fb->cwd, sizeof(fb->cwd), "%s", buf);
+        else                           snprintf(fb->cwd, sizeof(fb->cwd), "%s", "/");
     }
 #endif
 }
@@ -169,7 +316,10 @@ void fb_show(FileBrowser* fb) {
     fb_scan(fb);
 }
 
-void fb_close(FileBrowser* fb) { fb->open = false; }
+void fb_close(FileBrowser* fb) {
+    if (fb->path_edit) { fb->path_edit = false; SDL_StopTextInput(); }
+    fb->open = false;
+}
 
 int fb_result_count(const FileBrowser* fb) {
     return fb->result_ready ? fb->result_count : 0;
@@ -256,7 +406,58 @@ void fb_handle_event(FileBrowser* fb, const SDL_Event* e, const Skin* skin) {
     SDL_Rect lr = list_rect(skin);
     fb->rows_visible = lr.h / ROW_HEIGHT;
 
+    // Path-edit mode: route all input to the text field.
+    if (fb->path_edit) {
+        if (e->type == SDL_KEYDOWN) {
+            SDL_Keymod mod = SDL_GetModState();
+            switch (e->key.keysym.sym) {
+                case SDLK_ESCAPE:    fb_path_edit_end(fb); return;
+                case SDLK_RETURN:    fb_commit_typed_path(fb); return;
+                case SDLK_BACKSPACE: {
+                    size_t n = strlen(fb->path_buf);
+                    if (n > 0) fb->path_buf[n-1] = 0;
+                    return;
+                }
+                case SDLK_v:
+                    if (mod & KMOD_CTRL) {
+                        char* clip = SDL_GetClipboardText();
+                        if (clip) {
+                            size_t cur = strlen(fb->path_buf);
+                            size_t want = strlen(clip);
+                            if (cur + want >= sizeof(fb->path_buf)) want = sizeof(fb->path_buf) - cur - 1;
+                            memcpy(fb->path_buf + cur, clip, want);
+                            fb->path_buf[cur + want] = 0;
+                            SDL_free(clip);
+                        }
+                        return;
+                    }
+                    break;
+                default: break;
+            }
+        } else if (e->type == SDL_TEXTINPUT) {
+            const char* t = e->text.text;
+            size_t cur = strlen(fb->path_buf);
+            size_t want = strlen(t);
+            if (cur + want >= sizeof(fb->path_buf)) want = sizeof(fb->path_buf) - cur - 1;
+            memcpy(fb->path_buf + cur, t, want);
+            fb->path_buf[cur + want] = 0;
+            return;
+        } else if (e->type == SDL_MOUSEBUTTONDOWN && e->button.button == SDL_BUTTON_LEFT) {
+            int my = e->button.y;
+            // Click outside the cwd row exits edit mode (but still processes the click).
+            if (my < 12 || my >= 22) {
+                fb_path_edit_end(fb);
+                // fall through to normal handling below
+            } else {
+                return;
+            }
+        } else {
+            return;
+        }
+    }
+
     if (e->type == SDL_KEYDOWN) {
+        SDL_Keymod mod = SDL_GetModState();
         switch (e->key.keysym.sym) {
             case SDLK_ESCAPE: fb_close(fb); return;
             case SDLK_DOWN:
@@ -269,7 +470,6 @@ void fb_handle_event(FileBrowser* fb, const SDL_Event* e, const Skin* skin) {
                 if (fb->hover < fb->scroll) fb->scroll = fb->hover < 0 ? 0 : fb->hover;
                 return;
             case SDLK_RETURN:
-                // Enter: if hover is dir, navigate; otherwise open all selected (or hover)
                 if (fb->hover >= 0 && fb->hover < fb->n_entries
                     && fb->entries[fb->hover].is_dir) {
                     fb_navigate(fb, fb->entries[fb->hover].name);
@@ -280,8 +480,11 @@ void fb_handle_event(FileBrowser* fb, const SDL_Event* e, const Skin* skin) {
             case SDLK_BACKSPACE:
                 fb_navigate(fb, "..");
                 return;
+            case SDLK_l:
+                if (mod & KMOD_CTRL) { fb_path_edit_begin(fb); return; }
+                break;
             case SDLK_a:
-                if (SDL_GetModState() & KMOD_CTRL) {
+                if (mod & KMOD_CTRL) {
                     for (int i = 0; i < fb->n_entries; i++) {
                         if (!fb->entries[i].is_dir) fb->entries[i].selected = true;
                     }
@@ -305,6 +508,11 @@ void fb_handle_event(FileBrowser* fb, const SDL_Event* e, const Skin* skin) {
         }
     } else if (e->type == SDL_MOUSEBUTTONDOWN && e->button.button == SDL_BUTTON_LEFT) {
         int mx = e->button.x, my = e->button.y;
+        // Click on the cwd row in the header → enter path-edit mode.
+        if (my >= 12 && my < 22 && mx >= 0 && mx < skin->window_w) {
+            fb_path_edit_begin(fb);
+            return;
+        }
         SDL_Rect cr = cancel_rect(skin);
         SDL_Rect orr = open_rect(skin);
         if (mx >= cr.x && mx < cr.x + cr.w && my >= cr.y && my < cr.y + cr.h) {
@@ -374,17 +582,34 @@ void fb_render(FileBrowser* fb, SDL_Renderer* ren, const Skin* skin) {
     SDL_Rect header = { 0, 0, skin->window_w, HEADER_H };
     fill(ren, header, skin->theme_panel);
     font_draw(ren, 8, 4, 1, skin->theme_accent, "OPEN AUDIO");
-    char shown[200];
-    snprintf(shown, sizeof(shown), "%s", fb->cwd);
+
+    // path row: either cwd, or live path-edit buffer
     int max_chars = (skin->window_w - 16) / ((FONT_W + 1));
-    int n = (int)strlen(shown);
-    if (n > max_chars && max_chars > 4) {
-        // ellipsize the start so the directory name is visible
-        int keep = max_chars - 3;
-        memmove(shown, shown + (n - keep), keep + 1);
-        shown[0] = '.'; shown[1] = '.'; shown[2] = '.';
+    if (fb->path_edit) {
+        // edit-row background highlight
+        SDL_Rect edit = { 0, 11, skin->window_w, 11 };
+        fill(ren, edit, (SDL_Color){ 4, 8, 12, 255 });
+        char ed[FB_PATH_MAX + 4];
+        bool blink = ((SDL_GetTicks() / 500) % 2) == 0;
+        snprintf(ed, sizeof(ed), "%s%s", fb->path_buf, blink ? "_" : " ");
+        int en2 = (int)strlen(ed);
+        if (en2 > max_chars && max_chars > 4) {
+            int keep = max_chars - 3;
+            memmove(ed, ed + (en2 - keep), keep + 1);
+            ed[0] = '.'; ed[1] = '.'; ed[2] = '.';
+        }
+        font_draw(ren, 8, 12, 1, skin->theme_accent, ed);
+    } else {
+        char shown[200];
+        snprintf(shown, sizeof(shown), "%s", fb->cwd[0] ? fb->cwd : "DRIVES");
+        int n = (int)strlen(shown);
+        if (n > max_chars && max_chars > 4) {
+            int keep = max_chars - 3;
+            memmove(shown, shown + (n - keep), keep + 1);
+            shown[0] = '.'; shown[1] = '.'; shown[2] = '.';
+        }
+        font_draw(ren, 8, 12, 1, skin->theme_text, shown);
     }
-    font_draw(ren, 8, 12, 1, skin->theme_text, shown);
 
     // list area
     SDL_Rect lr = list_rect(skin);
@@ -466,5 +691,5 @@ void fb_render(FileBrowser* fb, SDL_Renderer* ren, const Skin* skin) {
     font_draw(ren, cr.x + (cr.w - tw) / 2, cr.y + (cr.h - FONT_H) / 2, 1, skin->theme_text, "CANCEL");
 
     font_draw(ren, 8, footer.y + (FOOTER_H - FONT_H) / 2, 1, skin->theme_text,
-              "CTRL-CLICK MULTI  SHIFT-CLICK RANGE  CTRL-A ALL");
+              "CTRL-CLICK MULTI  SHIFT-CLICK RANGE  CTRL-A ALL  CTRL-L PATH");
 }

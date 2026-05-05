@@ -29,6 +29,10 @@ typedef struct {
     bool result_ready;
     char result_paths[FB_MAX_PICKS][FB_PATH_MAX];
     int  result_count;
+
+    // Path entry: when active, cwd row becomes a text field (Ctrl-L or click on it).
+    bool path_edit;
+    char path_buf[FB_PATH_MAX];
 } FileBrowser;
 
 void fb_init(FileBrowser* fb);

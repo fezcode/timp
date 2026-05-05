@@ -28,7 +28,7 @@ endif
 BUILD := build
 SRCS  := src/main.c src/audio.c src/skin.c src/ui.c src/ini.c src/font.c \
          src/playlist.c src/filebrowser.c src/fft.c src/eq.c \
-         src/theme.c src/settings.c src/vendor.c
+         src/theme.c src/settings.c src/config.c src/vendor.c
 OBJS  := $(patsubst src/%.c,$(BUILD)/%.o,$(SRCS))
 
 ifeq ($(OS),Windows_NT)
