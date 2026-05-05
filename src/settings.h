@@ -1,12 +1,12 @@
-#ifndef WH_SETTINGS_H
-#define WH_SETTINGS_H
+#ifndef TIMP_SETTINGS_H
+#define TIMP_SETTINGS_H
 
 #include <stdbool.h>
 #include <SDL2/SDL.h>
 #include "skin.h"
 
-#define WH_VERSION "0.2.0"
-#define WH_BUILD_DATE __DATE__
+#define TIMP_VERSION "0.2.0"
+#define TIMP_BUILD_DATE __DATE__
 
 typedef enum {
     SET_TAB_THEMES = 0,

@@ -1,5 +1,5 @@
-#ifndef WH_FILEBROWSER_H
-#define WH_FILEBROWSER_H
+﻿#ifndef TIMP_FILEBROWSER_H
+#define TIMP_FILEBROWSER_H
 
 #include <stdbool.h>
 #include <SDL2/SDL.h>

@@ -1,5 +1,5 @@
-#ifndef WH_UI_H
-#define WH_UI_H
+﻿#ifndef TIMP_UI_H
+#define TIMP_UI_H
 
 #include <SDL2/SDL.h>
 #include "skin.h"
@@ -66,5 +66,16 @@ void ui_render(UI* ui, Audio* audio, Playlist* pl);
 int  ui_picks_count(UI* ui);
 const char* ui_pick_path(UI* ui, int i);
 void ui_clear_picks(UI* ui);
+
+typedef enum {
+    MEDIA_PLAY_PAUSE = 0,
+    MEDIA_STOP       = 1,
+    MEDIA_PREV       = 2,
+    MEDIA_NEXT       = 3,
+} MediaAction;
+
+// Single dispatch point for transport actions - used by SDL keys, the on-screen
+// buttons, and (on Windows) the system-wide media hotkeys.
+void ui_media(UI* ui, Audio* audio, Playlist* pl, MediaAction a);
 
 #endif

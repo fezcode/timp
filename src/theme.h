@@ -1,5 +1,5 @@
-#ifndef WH_THEME_H
-#define WH_THEME_H
+﻿#ifndef TIMP_THEME_H
+#define TIMP_THEME_H
 
 #include "skin.h"
 

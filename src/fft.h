@@ -1,5 +1,5 @@
-#ifndef WH_FFT_H
-#define WH_FFT_H
+﻿#ifndef TIMP_FFT_H
+#define TIMP_FFT_H
 
 // Real-input FFT magnitudes via radix-2 Cooley-Tukey.
 // `n` must be a power of two, <= 2048. Applies a Hann window.

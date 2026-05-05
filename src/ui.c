@@ -21,7 +21,7 @@ void ui_init(UI* ui, SDL_Renderer* ren, Skin* skin) {
     ui->pl_press_idx = -1;
     ui->eq_drag_band = -1;
     ui->playlist_visible = true;
-    snprintf(ui->display_title, sizeof(ui->display_title), "%s", "WHAMP - DROP A FILE");
+    snprintf(ui->display_title, sizeof(ui->display_title), "%s", "TIMP - DROP A FILE");
     fb_init(&ui->fb);
     settings_init(&ui->settings);
 }
@@ -111,6 +111,35 @@ static void load_and_play(Audio* audio, const char* path) {
     if (audio_load(audio, path)) audio_play(audio);
 }
 
+void ui_media(UI* ui, Audio* audio, Playlist* pl, MediaAction a) {
+    (void)ui;
+    switch (a) {
+        case MEDIA_PLAY_PAUSE:
+            if (audio_is_playing(audio)) audio_pause(audio);
+            else                          audio_play(audio);
+            break;
+        case MEDIA_STOP:
+            audio_stop(audio);
+            break;
+        case MEDIA_PREV:
+            if (audio_position_seconds(audio) > 3.0) {
+                audio_seek_seconds(audio, 0);
+            } else if (pl && playlist_has_prev(pl)) {
+                load_and_play(audio, playlist_prev(pl));
+            } else {
+                audio_seek_seconds(audio, 0);
+            }
+            break;
+        case MEDIA_NEXT:
+            if (pl && playlist_has_next(pl)) {
+                load_and_play(audio, playlist_next(pl));
+            } else {
+                audio_stop(audio);
+            }
+            break;
+    }
+}
+
 static UiAction fire_button(UI* ui, ButtonId id, Audio* audio, Playlist* pl) {
     UiAction act = {0};
     switch (id) {
@@ -123,8 +152,12 @@ static UiAction fire_button(UI* ui, ButtonId id, Audio* audio, Playlist* pl) {
                 audio_seek_seconds(audio, 0);
             }
             break;
-        case BTN_PLAY:  audio_play(audio); break;
-        case BTN_PAUSE: audio_pause(audio); break;
+        case BTN_PLAY:
+            // Merged play/pause: toggles based on current state.
+            if (audio_is_playing(audio)) audio_pause(audio);
+            else                          audio_play(audio);
+            break;
+        case BTN_PAUSE: audio_pause(audio); break;  // kept for skin compat; not bound by default
         case BTN_STOP:  audio_stop(audio); break;
         case BTN_NEXT:
             if (pl && playlist_has_next(pl)) {
@@ -420,6 +453,13 @@ UiAction ui_handle_event(UI* ui, const SDL_Event* e, Audio* audio, Playlist* pl)
             case SDLK_SPACE:
                 if (audio_is_playing(audio)) audio_pause(audio); else audio_play(audio);
                 break;
+            case SDLK_AUDIOPLAY:        ui_media(ui, audio, pl, MEDIA_PLAY_PAUSE); break;
+            case SDLK_AUDIOSTOP:        ui_media(ui, audio, pl, MEDIA_STOP);       break;
+            case SDLK_AUDIOPREV:        ui_media(ui, audio, pl, MEDIA_PREV);       break;
+            case SDLK_AUDIONEXT:        ui_media(ui, audio, pl, MEDIA_NEXT);       break;
+            case SDLK_VOLUMEUP:   audio_set_volume(audio, audio_get_volume(audio) + 0.05f); break;
+            case SDLK_VOLUMEDOWN: audio_set_volume(audio, audio_get_volume(audio) - 0.05f); break;
+            case SDLK_AUDIOMUTE:  audio_set_volume(audio, audio_get_volume(audio) > 0.f ? 0.f : 0.7f); break;
             case SDLK_s: audio_stop(audio); break;
             case SDLK_LEFT:  audio_seek_seconds(audio, audio_position_seconds(audio) - 5.0); break;
             case SDLK_RIGHT: audio_seek_seconds(audio, audio_position_seconds(audio) + 5.0); break;
@@ -700,13 +740,13 @@ static void render_background(UI* ui) {
         SDL_SetRenderDrawColor(ui->ren, sk->theme_accent.r, sk->theme_accent.g, sk->theme_accent.b, 80);
         SDL_RenderDrawLine(ui->ren, tb.x, tb.y + tb.h - 1, tb.x + tb.w, tb.y + tb.h - 1);
         font_draw(ui->ren, tb.x + 4, tb.y + (tb.h - FONT_H) / 2, 1,
-                  sk->theme_accent, "WHAMP");
+                  sk->theme_accent, "TIMP");
     }
     SDL_Rect b = { 0, 0, sk->window_w, sk->window_h };
     draw_rect(ui->ren, b, (SDL_Color){0,0,0,255});
 }
 
-static void render_button(UI* ui, ButtonId id, Playlist* pl) {
+static void render_button(UI* ui, ButtonId id, Audio* audio, Playlist* pl) {
     Skin* sk = ui->skin;
     SkinButton* btn = &sk->buttons[id];
     if (!btn->defined) return;
@@ -741,7 +781,11 @@ static void render_button(UI* ui, ButtonId id, Playlist* pl) {
 
     switch (id) {
         case BTN_PREV:    icon_prev(ui->ren, hit, icon_color); break;
-        case BTN_PLAY:    icon_play(ui->ren, hit, icon_color); break;
+        case BTN_PLAY:
+            // Single button: pause icon while playing, play icon otherwise.
+            if (audio_is_playing(audio)) icon_pause(ui->ren, hit, icon_color);
+            else                         icon_play(ui->ren, hit, icon_color);
+            break;
         case BTN_PAUSE:   icon_pause(ui->ren, hit, icon_color); break;
         case BTN_STOP:    icon_stop(ui->ren, hit, icon_color); break;
         case BTN_NEXT:    icon_next(ui->ren, hit, icon_color); break;
@@ -1022,7 +1066,7 @@ static void render_eq(UI* ui, Audio* audio) {
         fill_rect(ui->ren, tb, dim(sk->theme_panel, 0.7f));
         SDL_SetRenderDrawColor(ui->ren, sk->theme_accent.r, sk->theme_accent.g, sk->theme_accent.b, 80);
         SDL_RenderDrawLine(ui->ren, tb.x, tb.y + tb.h - 1, tb.x + tb.w, tb.y + tb.h - 1);
-        font_draw(ui->ren, tb.x + 4, tb.y + (tb.h - FONT_H) / 2, 1, sk->theme_accent, "WHAMP / EQ");
+        font_draw(ui->ren, tb.x + 4, tb.y + (tb.h - FONT_H) / 2, 1, sk->theme_accent, "TIMP / EQ");
     }
     // Reuse min/close
     if (sk->buttons[BTN_MIN].defined) {
@@ -1122,7 +1166,7 @@ void ui_render(UI* ui, Audio* audio, Playlist* pl) {
 
     render_background(ui);
 
-    for (int i = 0; i < BTN_COUNT; i++) render_button(ui, (ButtonId)i, pl);
+    for (int i = 0; i < BTN_COUNT; i++) render_button(ui, (ButtonId)i, audio, pl);
 
     double len = audio_length_seconds(audio);
     double pos = audio_position_seconds(audio);

@@ -1,5 +1,5 @@
-#ifndef WH_AUDIO_H
-#define WH_AUDIO_H
+﻿#ifndef TIMP_AUDIO_H
+#define TIMP_AUDIO_H
 
 #include <stdbool.h>
 #include <stdint.h>

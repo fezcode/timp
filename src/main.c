@@ -1,7 +1,18 @@
 #include <SDL2/SDL.h>
+#include <SDL2/SDL_syswm.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+#include <windows.h>
+// Hotkey IDs registered against the SDL window so media keys work even when
+// Timp isn't focused.
+#define HK_PLAY_PAUSE 1
+#define HK_STOP       2
+#define HK_PREV       3
+#define HK_NEXT       4
+#endif
 
 #include "audio.h"
 #include "skin.h"
@@ -20,13 +31,13 @@ static const char* basename_only(const char* path) {
 static void update_titles(SDL_Window* win, UI* ui, const Playlist* pl) {
     const char* path = playlist_current(pl);
     if (!path) {
-        SDL_SetWindowTitle(win, "WHamp");
-        ui_set_title(ui, "WHAMP - DROP A FILE");
+        SDL_SetWindowTitle(win, "Timp");
+        ui_set_title(ui, "TIMP - DROP A FILE");
         return;
     }
     const char* name = basename_only(path);
     char wt[320];
-    snprintf(wt, sizeof(wt), "WHamp - %s", name);
+    snprintf(wt, sizeof(wt), "Timp - %s", name);
     SDL_SetWindowTitle(win, wt);
 
     char shown[256];
@@ -48,13 +59,19 @@ static void load_current(Audio* audio, const Playlist* pl, bool start_playing) {
 static SDL_HitTestResult SDLCALL hittest_cb(SDL_Window* win, const SDL_Point* area, void* data) {
     (void)win;
     UI* ui = (UI*)data;
-    // Modal title bars: drag from the header band (above any tabs / list / buttons).
+    // Modal title bars: drag from the title strip only — leave the path row (y >= 12)
+    // and the title-bar buttons clickable. Without this, clicking the path strip
+    // would drag the window instead of entering path-edit mode.
     if (ui->fb.open) {
-        if (area->y < 22) return SDL_HITTEST_DRAGGABLE;
+        if (area->y < 12 && skin_button_at(ui->skin, area->x, area->y) < 0) {
+            return SDL_HITTEST_DRAGGABLE;
+        }
         return SDL_HITTEST_NORMAL;
     }
     if (ui->settings.open) {
-        if (area->y < 16) return SDL_HITTEST_DRAGGABLE;
+        if (area->y < 12 && skin_button_at(ui->skin, area->x, area->y) < 0) {
+            return SDL_HITTEST_DRAGGABLE;
+        }
         return SDL_HITTEST_NORMAL;
     }
     if (skin_button_at(ui->skin, area->x, area->y) >= 0) return SDL_HITTEST_NORMAL;
@@ -90,7 +107,7 @@ int main(int argc, char** argv) {
     const char* default_skin = "skins/default/skin.ini";
     const char* skin_path = skin_arg ? skin_arg : default_skin;
 
-    SDL_Window* win = SDL_CreateWindow("WHamp",
+    SDL_Window* win = SDL_CreateWindow("Timp",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         380, 110,
         SDL_WINDOW_SHOWN | SDL_WINDOW_BORDERLESS | SDL_WINDOW_ALLOW_HIGHDPI);
@@ -141,6 +158,23 @@ int main(int argc, char** argv) {
 
     SDL_EventState(SDL_DROPFILE, SDL_ENABLE);
 
+#ifdef _WIN32
+    // Capture system-wide media keys via Win32 RegisterHotKey. SDL_SYSWMEVENT
+    // forwards the resulting WM_HOTKEY messages into the SDL event queue.
+    SDL_EventState(SDL_SYSWMEVENT, SDL_ENABLE);
+    {
+        SDL_SysWMinfo wm; SDL_VERSION(&wm.version);
+        if (SDL_GetWindowWMInfo(win, &wm) && wm.subsystem == SDL_SYSWM_WINDOWS) {
+            HWND hwnd = wm.info.win.window;
+            // MOD_NOREPEAT (0x4000) keeps a held key from firing repeatedly.
+            RegisterHotKey(hwnd, HK_PLAY_PAUSE, 0x4000, VK_MEDIA_PLAY_PAUSE);
+            RegisterHotKey(hwnd, HK_STOP,       0x4000, VK_MEDIA_STOP);
+            RegisterHotKey(hwnd, HK_PREV,       0x4000, VK_MEDIA_PREV_TRACK);
+            RegisterHotKey(hwnd, HK_NEXT,       0x4000, VK_MEDIA_NEXT_TRACK);
+        }
+    }
+#endif
+
     // Window-size juggling. Three states:
     //   modal (file browser or settings open) -> larger window
     //   playlist visible                       -> compact + playlist
@@ -167,6 +201,20 @@ int main(int argc, char** argv) {
         while (SDL_PollEvent(&e)) {
             switch (e.type) {
                 case SDL_QUIT: running = 0; break;
+#ifdef _WIN32
+                case SDL_SYSWMEVENT: {
+                    SDL_SysWMmsg* m = e.syswm.msg;
+                    if (m && m->subsystem == SDL_SYSWM_WINDOWS && m->msg.win.msg == WM_HOTKEY) {
+                        switch ((int)m->msg.win.wParam) {
+                            case HK_PLAY_PAUSE: ui_media(&ui, audio, &pl, MEDIA_PLAY_PAUSE); break;
+                            case HK_STOP:       ui_media(&ui, audio, &pl, MEDIA_STOP);       break;
+                            case HK_PREV:       ui_media(&ui, audio, &pl, MEDIA_PREV);       break;
+                            case HK_NEXT:       ui_media(&ui, audio, &pl, MEDIA_NEXT);       break;
+                        }
+                    }
+                    break;
+                }
+#endif
                 case SDL_DROPBEGIN:
                     drop_active = true;
                     drop_was_idle = !audio_is_loaded(audio) || !audio_is_playing(audio);
@@ -252,6 +300,11 @@ int main(int argc, char** argv) {
         if (modal) {
             want_w = MODAL_WIN_W;
             want_h = MODAL_WIN_H;
+        } else if (ui.eq_open) {
+            // EQ panel needs the full player height; without this it would clip
+            // when the playlist is hidden (window would be only 88 px tall).
+            want_w = orig_skin_w;
+            want_h = orig_skin_h;
         } else {
             want_w = orig_skin_w;
             want_h = ui.playlist_visible ? orig_skin_h : PLAYER_NO_PL_H;
@@ -267,7 +320,14 @@ int main(int argc, char** argv) {
                 skin.buttons[BTN_MIN].hit   = orig_btn_min;
                 skin.buttons[BTN_CLOSE].hit = orig_btn_close;
             }
-            SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+            // Recenter on the same display the user dragged the window to —
+            // SDL_WINDOWPOS_CENTERED defaults to the primary, which would yank
+            // the modal to the wrong monitor.
+            int disp = SDL_GetWindowDisplayIndex(win);
+            if (disp < 0) disp = 0;
+            SDL_SetWindowPosition(win,
+                SDL_WINDOWPOS_CENTERED_DISPLAY(disp),
+                SDL_WINDOWPOS_CENTERED_DISPLAY(disp));
             was_modal = modal;
         }
 
@@ -292,6 +352,19 @@ int main(int argc, char** argv) {
     cfg.playlist_visible = ui.settings.playlist_visible;
     cfg.current_theme    = ui.settings.current_theme;
     config_save(&cfg);
+
+#ifdef _WIN32
+    {
+        SDL_SysWMinfo wm; SDL_VERSION(&wm.version);
+        if (SDL_GetWindowWMInfo(win, &wm) && wm.subsystem == SDL_SYSWM_WINDOWS) {
+            HWND hwnd = wm.info.win.window;
+            UnregisterHotKey(hwnd, HK_PLAY_PAUSE);
+            UnregisterHotKey(hwnd, HK_STOP);
+            UnregisterHotKey(hwnd, HK_PREV);
+            UnregisterHotKey(hwnd, HK_NEXT);
+        }
+    }
+#endif
 
     audio_destroy(audio);
     ui_destroy(&ui);

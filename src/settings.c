@@ -13,10 +13,10 @@
 static const char* TAB_NAMES[SET_TAB_COUNT] = { "THEMES", "OPTIONS", "ABOUT" };
 
 static const char* ABOUT_LINES[] = {
-    "WHAMP",
+    "TIMP",
     "",
-    "VERSION " WH_VERSION,
-    "BUILT  " WH_BUILD_DATE,
+    "VERSION " TIMP_VERSION,
+    "BUILT  " TIMP_BUILD_DATE,
     "",
     "A NATIVE CROSS-PLATFORM PLAYER WRITTEN IN C.",
     "",

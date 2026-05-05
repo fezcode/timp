@@ -1,5 +1,5 @@
-#ifndef WH_FONT_H
-#define WH_FONT_H
+﻿#ifndef TIMP_FONT_H
+#define TIMP_FONT_H
 
 #include <SDL2/SDL.h>
 

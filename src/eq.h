@@ -1,5 +1,5 @@
-#ifndef WH_EQ_H
-#define WH_EQ_H
+﻿#ifndef TIMP_EQ_H
+#define TIMP_EQ_H
 
 #include <stdbool.h>
 

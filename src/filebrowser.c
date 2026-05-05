@@ -461,13 +461,41 @@ void fb_handle_event(FileBrowser* fb, const SDL_Event* e, const Skin* skin) {
         switch (e->key.keysym.sym) {
             case SDLK_ESCAPE: fb_close(fb); return;
             case SDLK_DOWN:
-                if (fb->hover < fb->n_entries - 1) fb->hover++;
-                if (fb->hover >= 0 && fb->hover - fb->scroll >= fb->rows_visible)
+                if (fb->n_entries == 0) return;
+                fb->hover = (fb->hover < 0) ? 0 : fb->hover + 1;
+                if (fb->hover >= fb->n_entries) fb->hover = fb->n_entries - 1;
+                if (fb->hover - fb->scroll >= fb->rows_visible)
                     fb->scroll = fb->hover - fb->rows_visible + 1;
                 return;
             case SDLK_UP:
-                if (fb->hover > 0) fb->hover--;
-                if (fb->hover < fb->scroll) fb->scroll = fb->hover < 0 ? 0 : fb->hover;
+                if (fb->n_entries == 0) return;
+                fb->hover = (fb->hover < 0) ? 0 : fb->hover - 1;
+                if (fb->hover < 0) fb->hover = 0;
+                if (fb->hover < fb->scroll) fb->scroll = fb->hover;
+                return;
+            case SDLK_PAGEDOWN:
+                if (fb->n_entries == 0) return;
+                fb->hover = (fb->hover < 0 ? 0 : fb->hover) + fb->rows_visible;
+                if (fb->hover >= fb->n_entries) fb->hover = fb->n_entries - 1;
+                if (fb->hover - fb->scroll >= fb->rows_visible)
+                    fb->scroll = fb->hover - fb->rows_visible + 1;
+                return;
+            case SDLK_PAGEUP:
+                if (fb->n_entries == 0) return;
+                fb->hover = (fb->hover < 0 ? 0 : fb->hover) - fb->rows_visible;
+                if (fb->hover < 0) fb->hover = 0;
+                if (fb->hover < fb->scroll) fb->scroll = fb->hover;
+                return;
+            case SDLK_HOME:
+                if (fb->n_entries == 0) return;
+                fb->hover = 0;
+                fb->scroll = 0;
+                return;
+            case SDLK_END:
+                if (fb->n_entries == 0) return;
+                fb->hover = fb->n_entries - 1;
+                if (fb->hover - fb->scroll >= fb->rows_visible)
+                    fb->scroll = fb->hover - fb->rows_visible + 1;
                 return;
             case SDLK_RETURN:
                 if (fb->hover >= 0 && fb->hover < fb->n_entries
@@ -499,8 +527,9 @@ void fb_handle_event(FileBrowser* fb, const SDL_Event* e, const Skin* skin) {
         if (fb->scroll < 0) fb->scroll = 0;
         if (fb->scroll > max_scroll) fb->scroll = max_scroll;
     } else if (e->type == SDL_MOUSEMOTION) {
+        // Only update the cursor when the mouse is actually over a row. Moving the
+        // mouse off the list shouldn't reset the keyboard cursor.
         int mx = e->motion.x, my = e->motion.y;
-        fb->hover = -1;
         if (mx >= lr.x && mx < lr.x + lr.w && my >= lr.y && my < lr.y + lr.h) {
             int row = (my - lr.y) / ROW_HEIGHT;
             int idx = fb->scroll + row;
@@ -635,6 +664,11 @@ void fb_render(FileBrowser* fb, SDL_Renderer* ren, const Skin* skin) {
             fill(ren, row, bg);
         } else if (idx == fb->hover) {
             fill(ren, row, skin->theme_panel);
+        }
+        // Cursor row gets an accent left-bar so keyboard nav is obvious.
+        if (idx == fb->hover) {
+            SDL_Rect bar = { row.x, row.y, 2, row.h };
+            fill(ren, bar, skin->theme_accent);
         }
 
         SDL_Color color = en->is_dir ? skin->theme_accent

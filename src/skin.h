@@ -1,5 +1,5 @@
-#ifndef WH_SKIN_H
-#define WH_SKIN_H
+﻿#ifndef TIMP_SKIN_H
+#define TIMP_SKIN_H
 
 #include <stdbool.h>
 #include <SDL2/SDL.h>

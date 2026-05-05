@@ -57,12 +57,13 @@ void skin_default(Skin* skin) {
     // Transport row
     int y = 62, h = 22, w = 28, gap = 2;
     int xs = 6;
+    // Play and pause are merged into a single state-driven BTN_PLAY button.
     skin->buttons[BTN_PREV].hit  = (SDL_Rect){ xs + 0*(w+gap), y, w, h };
     skin->buttons[BTN_PLAY].hit  = (SDL_Rect){ xs + 1*(w+gap), y, w, h };
-    skin->buttons[BTN_PAUSE].hit = (SDL_Rect){ xs + 2*(w+gap), y, w, h };
-    skin->buttons[BTN_STOP].hit  = (SDL_Rect){ xs + 3*(w+gap), y, w, h };
-    skin->buttons[BTN_NEXT].hit  = (SDL_Rect){ xs + 4*(w+gap), y, w, h };
-    skin->buttons[BTN_OPEN].hit  = (SDL_Rect){ xs + 5*(w+gap), y, w, h };
+    skin->buttons[BTN_STOP].hit  = (SDL_Rect){ xs + 2*(w+gap), y, w, h };
+    skin->buttons[BTN_NEXT].hit  = (SDL_Rect){ xs + 3*(w+gap), y, w, h };
+    skin->buttons[BTN_OPEN].hit  = (SDL_Rect){ xs + 4*(w+gap), y, w, h };
+    skin->buttons[BTN_PAUSE].defined = false;  // legacy slot, kept in enum for skin compat
     // Right-side cluster: EQ, SHUFFLE, LOOP — three same-width buttons against the right edge
     skin->buttons[BTN_EQ].hit      = (SDL_Rect){ skin->window_w - 6 - 3*(w+gap) + gap, y, w, h };
     skin->buttons[BTN_SHUFFLE].hit = (SDL_Rect){ skin->window_w - 6 - 2*(w+gap) + gap, y, w, h };

@@ -1,5 +1,5 @@
-#ifndef WH_INI_H
-#define WH_INI_H
+﻿#ifndef TIMP_INI_H
+#define TIMP_INI_H
 
 #include <stdbool.h>
 

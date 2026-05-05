@@ -1,5 +1,5 @@
-#ifndef WH_PLAYLIST_H
-#define WH_PLAYLIST_H
+﻿#ifndef TIMP_PLAYLIST_H
+#define TIMP_PLAYLIST_H
 
 #include <stdbool.h>
 

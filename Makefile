@@ -32,9 +32,9 @@ SRCS  := src/main.c src/audio.c src/skin.c src/ui.c src/ini.c src/font.c \
 OBJS  := $(patsubst src/%.c,$(BUILD)/%.o,$(SRCS))
 
 ifeq ($(OS),Windows_NT)
-    BIN := $(BUILD)/whamp.exe
+    BIN := $(BUILD)/timp.exe
 else
-    BIN := $(BUILD)/whamp
+    BIN := $(BUILD)/timp
 endif
 
 .PHONY: all clean run

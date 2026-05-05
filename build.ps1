@@ -36,9 +36,9 @@ foreach ($s in $srcs) {
     if ($LASTEXITCODE -ne 0) { throw "compile failed: $s" }
 }
 
-Write-Output 'linking whamp.exe'
+Write-Output 'linking timp.exe'
 $objs = $srcs | ForEach-Object { "build\$_.o" }
-& $gcc @objs -o build\whamp.exe @sdlLibs @winLibs
+& $gcc @objs -o build\timp.exe @sdlLibs @winLibs
 if ($LASTEXITCODE -ne 0) { throw 'link failed' }
 
 # Copy SDL2.dll alongside for portable distribution
@@ -53,4 +53,4 @@ if (Test-Path skins) {
     Copy-Item skins\* $dst -Recurse -Force
 }
 
-Write-Output ('built ' + (Resolve-Path build\whamp.exe))
+Write-Output ('built ' + (Resolve-Path build\timp.exe))

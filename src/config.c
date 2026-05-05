@@ -4,34 +4,18 @@
 #include <string.h>
 #include <stdlib.h>
 
-#ifdef _WIN32
-#include <windows.h>
-#include <direct.h>
-#else
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
-#endif
+#include <SDL2/SDL.h>
 
+// Portable layout: config.ini sits next to the executable so users can drop
+// the app onto a USB stick and carry their settings with it.
 static void config_path(char* out, size_t cap) {
-#ifdef _WIN32
-    const char* base = getenv("APPDATA");
-    if (!base) base = getenv("USERPROFILE");
-    if (!base) { snprintf(out, cap, "whamp.ini"); return; }
-    char dir[512];
-    snprintf(dir, sizeof(dir), "%s\\WHamp", base);
-    _mkdir(dir);
-    snprintf(out, cap, "%s\\config.ini", dir);
-#else
-    const char* home = getenv("HOME");
-    if (!home) { snprintf(out, cap, "whamp.ini"); return; }
-    char dir[512];
-    snprintf(dir, sizeof(dir), "%s/.config", home);
-    mkdir(dir, 0755);
-    snprintf(dir, sizeof(dir), "%s/.config/whamp", home);
-    mkdir(dir, 0755);
-    snprintf(out, cap, "%s/.config/whamp/config.ini", home);
-#endif
+    char* base = SDL_GetBasePath();
+    if (base) {
+        snprintf(out, cap, "%sconfig.ini", base);  // SDL_GetBasePath includes trailing sep
+        SDL_free(base);
+    } else {
+        snprintf(out, cap, "config.ini");
+    }
 }
 
 void config_default(WhConfig* c) {
@@ -64,7 +48,7 @@ bool config_save(const WhConfig* c) {
     config_path(path, sizeof(path));
     FILE* f = fopen(path, "w");
     if (!f) return false;
-    fprintf(f, "# WHamp config — edited by the app, but human-readable.\n");
+    fprintf(f, "# Timp config - edited by the app, but human-readable.\n");
     fprintf(f, "always_on_top=%d\n",    c->always_on_top ? 1 : 0);
     fprintf(f, "playlist_visible=%d\n", c->playlist_visible ? 1 : 0);
     fprintf(f, "current_theme=%d\n",    c->current_theme);

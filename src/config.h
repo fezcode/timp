@@ -1,5 +1,5 @@
-#ifndef WH_CONFIG_H
-#define WH_CONFIG_H
+﻿#ifndef TIMP_CONFIG_H
+#define TIMP_CONFIG_H
 
 #include <stdbool.h>
 
