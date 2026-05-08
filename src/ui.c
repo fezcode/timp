@@ -307,6 +307,13 @@ UiAction ui_handle_event(UI* ui, const SDL_Event* e, Audio* audio, Playlist* pl)
             ui->settings.plv_changed = false;
             act.settings_changed = true;
         }
+        if (ui->settings.skin_changed) {
+            // Host hot-swaps the skin from selected_skin_path then resyncs
+            // anything derived from the previous Skin (window size, etc).
+            act.skin_changed = true;
+            ui->settings.skin_changed = false;
+            act.settings_changed = true;
+        }
         return act;
     }
     if (ui->eq_open) {

@@ -5,6 +5,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <dirent.h>
+#include <sys/stat.h>
+#endif
+
 #include "../vendor/stb_image.h"
 
 static const char* btn_section[BTN_COUNT] = {
@@ -362,4 +369,99 @@ int skin_button_at(const Skin* skin, int x, int y) {
             y >= b->hit.y && y < b->hit.y + b->hit.h) return i;
     }
     return -1;
+}
+
+// Reads just enough of a skin.ini to recover its display name. Falls back to
+// the folder name when [meta] name is missing.
+static void read_skin_name(const char* ini_path, const char* fallback,
+                           char* out, size_t out_size) {
+    Ini ini;
+    if (ini_load(&ini, ini_path)) {
+        const char* nm = ini_get(&ini, "meta", "name");
+        if (nm && *nm) snprintf(out, out_size, "%s", nm);
+        else           snprintf(out, out_size, "%s", fallback);
+        ini_free(&ini);
+    } else {
+        snprintf(out, out_size, "%s", fallback);
+    }
+}
+
+static int cmp_skin_entry(const void* a, const void* b) {
+    return strcmp(((const SkinEntry*)a)->name, ((const SkinEntry*)b)->name);
+}
+
+int skin_scan(SkinEntry* out, int max) {
+    if (max <= 0) return 0;
+    int n = 0;
+
+    char* base = SDL_GetBasePath();
+    char skins_dir[512];
+    if (base) {
+        snprintf(skins_dir, sizeof(skins_dir), "%sskins", base);
+        SDL_free(base);
+    } else {
+        snprintf(skins_dir, sizeof(skins_dir), "skins");
+    }
+
+#ifdef _WIN32
+    char pat[600];
+    snprintf(pat, sizeof(pat), "%s\\*", skins_dir);
+    int wn = MultiByteToWideChar(CP_UTF8, 0, pat, -1, NULL, 0);
+    wchar_t* wpat = (wchar_t*)malloc(sizeof(wchar_t) * wn);
+    if (!wpat) return 0;
+    MultiByteToWideChar(CP_UTF8, 0, pat, -1, wpat, wn);
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(wpat, &fd);
+    free(wpat);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+        if (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0) continue;
+
+        int un = WideCharToMultiByte(CP_UTF8, 0, fd.cFileName, -1, NULL, 0, NULL, NULL);
+        char* uname = (char*)malloc(un);
+        if (!uname) continue;
+        WideCharToMultiByte(CP_UTF8, 0, fd.cFileName, -1, uname, un, NULL, NULL);
+
+        char ini_path[512];
+        snprintf(ini_path, sizeof(ini_path), "%s\\%s\\skin.ini", skins_dir, uname);
+
+        FILE* f = fopen(ini_path, "rb");
+        if (f) {
+            fclose(f);
+            if (n < max) {
+                snprintf(out[n].path, sizeof(out[n].path), "%s", ini_path);
+                read_skin_name(ini_path, uname, out[n].name, sizeof(out[n].name));
+                n++;
+            }
+        }
+        free(uname);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+#else
+    DIR* d = opendir(skins_dir);
+    if (!d) return 0;
+    struct dirent* de;
+    while ((de = readdir(d)) != NULL) {
+        if (de->d_name[0] == '.') continue;
+        char sub[512];
+        snprintf(sub, sizeof(sub), "%s/%s", skins_dir, de->d_name);
+        struct stat st;
+        if (stat(sub, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+        char ini_path[600];
+        snprintf(ini_path, sizeof(ini_path), "%s/skin.ini", sub);
+        FILE* f = fopen(ini_path, "rb");
+        if (!f) continue;
+        fclose(f);
+        if (n < max) {
+            snprintf(out[n].path, sizeof(out[n].path), "%s", ini_path);
+            read_skin_name(ini_path, de->d_name, out[n].name, sizeof(out[n].name));
+            n++;
+        }
+    }
+    closedir(d);
+#endif
+
+    qsort(out, n, sizeof(SkinEntry), cmp_skin_entry);
+    return n;
 }

@@ -53,6 +53,7 @@ typedef struct {
     bool aot_changed;          // host should call SDL_SetWindowAlwaysOnTop
     bool playlist_vis_changed; // host should resize window
     bool settings_changed;     // host should persist config
+    bool skin_changed;         // host should hot-swap to ui->settings.selected_skin_path
 } UiAction;
 
 void ui_init(UI* ui, SDL_Renderer* ren, Skin* skin);

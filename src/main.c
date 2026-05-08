@@ -104,8 +104,17 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Loading priority: --skin CLI arg > config.ini's skin_path > built-in default.
     const char* default_skin = "skins/default/skin.ini";
-    const char* skin_path = skin_arg ? skin_arg : default_skin;
+    char active_skin_path[300];
+    {
+        WhConfig probe;
+        config_load(&probe);
+        if (skin_arg && *skin_arg)              snprintf(active_skin_path, sizeof(active_skin_path), "%s", skin_arg);
+        else if (probe.skin_path[0])            snprintf(active_skin_path, sizeof(active_skin_path), "%s", probe.skin_path);
+        else                                    snprintf(active_skin_path, sizeof(active_skin_path), "%s", default_skin);
+    }
+    const char* skin_path = active_skin_path;
 
     SDL_Window* win = SDL_CreateWindow("Timp",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -144,6 +153,8 @@ int main(int argc, char** argv) {
     ui.settings.playlist_visible = cfg.playlist_visible;
     ui.settings.current_theme    = cfg.current_theme;
     ui.playlist_visible          = cfg.playlist_visible;
+    snprintf(ui.settings.selected_skin_path, sizeof(ui.settings.selected_skin_path),
+             "%s", active_skin_path);
 
     SDL_SetWindowHitTest(win, hittest_cb, &ui);
 
@@ -179,9 +190,10 @@ int main(int argc, char** argv) {
     //   modal (file browser or settings open) -> modal_w x modal_h from skin
     //   playlist visible                       -> window_w x window_h from skin
     //   playlist hidden                        -> window_w x compact_h from skin
-    const int MODAL_WIN_W = skin.modal_w   > 0 ? skin.modal_w   : 520;
-    const int MODAL_WIN_H = skin.modal_h   > 0 ? skin.modal_h   : 380;
-    const int PLAYER_NO_PL_H = skin.compact_h > 0 ? skin.compact_h : 88;
+    // Mutable (not const) so a skin hot-swap can refresh them in place.
+    int MODAL_WIN_W    = skin.modal_w   > 0 ? skin.modal_w   : 520;
+    int MODAL_WIN_H    = skin.modal_h   > 0 ? skin.modal_h   : 380;
+    int PLAYER_NO_PL_H = skin.compact_h > 0 ? skin.compact_h : 88;
     int orig_skin_w = skin.window_w;
     int orig_skin_h = skin.window_h;  // full height with playlist
     SDL_Rect orig_btn_min   = skin.buttons[BTN_MIN].hit;
@@ -253,6 +265,35 @@ int main(int argc, char** argv) {
                     if (act.aot_changed) {
                         always_on_top = ui.settings.always_on_top;
                         SDL_SetWindowAlwaysOnTop(win, always_on_top ? SDL_TRUE : SDL_FALSE);
+                    }
+                    if (act.skin_changed && ui.settings.selected_skin_path[0]) {
+                        // Tear down the current skin's textures and load the new one
+                        // in place — ui.skin still points at the same Skin object so
+                        // every subsystem (font_set_skin, settings, ui) keeps working.
+                        skin_destroy(&skin);
+                        if (!skin_load(&skin, ren, ui.settings.selected_skin_path)) {
+                            fprintf(stderr, "skin load failed: %s\n", ui.settings.selected_skin_path);
+                            skin_default(&skin);
+                        }
+                        if (cfg.current_theme > 0 && cfg.current_theme < theme_count()) {
+                            theme_apply(&skin, cfg.current_theme);
+                        }
+                        // Resync host-tracked, skin-derived state.
+                        MODAL_WIN_W    = skin.modal_w   > 0 ? skin.modal_w   : 520;
+                        MODAL_WIN_H    = skin.modal_h   > 0 ? skin.modal_h   : 380;
+                        PLAYER_NO_PL_H = skin.compact_h > 0 ? skin.compact_h : 88;
+                        orig_skin_w    = skin.window_w;
+                        orig_skin_h    = skin.window_h;
+                        orig_btn_min   = skin.buttons[BTN_MIN].hit;
+                        orig_btn_close = skin.buttons[BTN_CLOSE].hit;
+                        snprintf(active_skin_path, sizeof(active_skin_path),
+                                 "%s", ui.settings.selected_skin_path);
+                        snprintf(cfg.skin_path, sizeof(cfg.skin_path),
+                                 "%s", ui.settings.selected_skin_path);
+                        // Re-trigger the modal-state branch on the next frame so
+                        // title-bar button positions and the window center get
+                        // re-applied for the freshly-loaded skin.
+                        was_modal = !was_modal;
                     }
                     if (act.settings_changed) {
                         cfg.always_on_top    = ui.settings.always_on_top;

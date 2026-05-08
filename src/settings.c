@@ -12,7 +12,7 @@ static int set_tab_h(const Skin* sk)    { return sk->set.tab_h    > 0 ? sk->set.
 static int set_footer_h(const Skin* sk) { return sk->set.footer_h > 0 ? sk->set.footer_h : 22; }
 static int set_row_h(const Skin* sk)    { return sk->set.row_h    > 0 ? sk->set.row_h    : 16; }
 
-static const char* TAB_NAMES[SET_TAB_COUNT] = { "THEMES", "OPTIONS", "ABOUT" };
+static const char* TAB_NAMES[SET_TAB_COUNT] = { "THEMES", "SKINS", "OPTIONS", "ABOUT" };
 
 static const char* ABOUT_LINES[] = {
     "TIMP",
@@ -35,6 +35,23 @@ static const char* ABOUT_LINES[] = {
 void settings_init(Settings* s) {
     memset(s, 0, sizeof(*s));
     s->hover_theme = -1;
+    s->hover_skin = -1;
+    s->current_skin = -1;
+}
+
+// Refresh the SKINS list and figure out which entry matches the currently-
+// loaded skin so the row can be highlighted.
+static void rescan_skins(Settings* s) {
+    s->skin_count = skin_scan(s->skins, SET_MAX_SKINS);
+    s->current_skin = -1;
+    if (s->selected_skin_path[0]) {
+        for (int i = 0; i < s->skin_count; i++) {
+            if (strcmp(s->skins[i].path, s->selected_skin_path) == 0) {
+                s->current_skin = i;
+                break;
+            }
+        }
+    }
 }
 
 void settings_show(Settings* s) {
@@ -42,6 +59,8 @@ void settings_show(Settings* s) {
     s->theme_changed = false;
     s->aot_changed = false;
     s->plv_changed = false;
+    s->skin_changed = false;
+    rescan_skins(s);
 }
 
 void settings_close(Settings* s) { s->open = false; }
@@ -129,27 +148,51 @@ void settings_handle_event(Settings* s, const SDL_Event* e, const Skin* skin) {
                     return;
                 }
             }
+        } else if (s->tab == SET_TAB_SKINS) {
+            SDL_Rect c = content_rect(skin);
+            int rh = set_row_h(skin);
+            int rows_visible = c.h / rh;
+            for (int i = s->skin_scroll; i < s->skin_count && i < s->skin_scroll + rows_visible; i++) {
+                SDL_Rect rr = { c.x, c.y + (i - s->skin_scroll) * rh, c.w, rh };
+                if (point_in(rr, mx, my)) {
+                    s->current_skin = i;
+                    snprintf(s->selected_skin_path, sizeof(s->selected_skin_path),
+                             "%s", s->skins[i].path);
+                    s->skin_changed = true;
+                    return;
+                }
+            }
         }
     } else if (e->type == SDL_MOUSEMOTION) {
+        int mx = e->motion.x, my = e->motion.y;
         s->hover_theme = -1;
-        if (s->tab == SET_TAB_THEMES) {
-            int mx = e->motion.x, my = e->motion.y;
-            SDL_Rect c = content_rect(skin);
-            if (mx >= c.x && mx < c.x + c.w && my >= c.y && my < c.y + c.h) {
-                int row = (my - c.y) / set_row_h(skin);
+        s->hover_skin = -1;
+        SDL_Rect c = content_rect(skin);
+        if (mx >= c.x && mx < c.x + c.w && my >= c.y && my < c.y + c.h) {
+            int row = (my - c.y) / set_row_h(skin);
+            if (s->tab == SET_TAB_THEMES) {
                 int idx = s->theme_scroll + row;
                 if (idx >= 0 && idx < theme_count()) s->hover_theme = idx;
+            } else if (s->tab == SET_TAB_SKINS) {
+                int idx = s->skin_scroll + row;
+                if (idx >= 0 && idx < s->skin_count) s->hover_skin = idx;
             }
         }
     } else if (e->type == SDL_MOUSEWHEEL) {
+        SDL_Rect c = content_rect(skin);
+        int rows_visible = c.h / set_row_h(skin);
         if (s->tab == SET_TAB_THEMES) {
-            SDL_Rect c = content_rect(skin);
-            int rows_visible = c.h / set_row_h(skin);
             int max_scroll = theme_count() - rows_visible;
             if (max_scroll < 0) max_scroll = 0;
             s->theme_scroll -= e->wheel.y * 2;
             if (s->theme_scroll < 0) s->theme_scroll = 0;
             if (s->theme_scroll > max_scroll) s->theme_scroll = max_scroll;
+        } else if (s->tab == SET_TAB_SKINS) {
+            int max_scroll = s->skin_count - rows_visible;
+            if (max_scroll < 0) max_scroll = 0;
+            s->skin_scroll -= e->wheel.y * 2;
+            if (s->skin_scroll < 0) s->skin_scroll = 0;
+            if (s->skin_scroll > max_scroll) s->skin_scroll = max_scroll;
         }
     }
 }
@@ -199,6 +242,39 @@ static void render_themes_tab(Settings* s, SDL_Renderer* ren, const Skin* skin) 
 
         SDL_Color name_c = is_current ? skin->theme_accent : skin->theme_text;
         font_draw(ren, sx + 50, r.y + (r.h - FONT_H) / 2, 1, name_c, t->name);
+    }
+}
+
+static void render_skins_tab(Settings* s, SDL_Renderer* ren, const Skin* skin) {
+    SDL_Rect c = content_rect(skin);
+    fill(ren, c, (SDL_Color){ 6, 10, 14, 255 });
+    stroke(ren, c, dim_c(skin->theme_accent, 0.4f));
+
+    if (s->skin_count == 0) {
+        font_draw(ren, c.x + 8, c.y + 8, 1, skin->theme_text,
+                  "NO SKINS FOUND IN ./SKINS/");
+        return;
+    }
+
+    int rh = set_row_h(skin);
+    int rows_visible = c.h / rh;
+    if (s->skin_scroll < 0) s->skin_scroll = 0;
+    int max_scroll = s->skin_count - rows_visible;
+    if (max_scroll < 0) max_scroll = 0;
+    if (s->skin_scroll > max_scroll) s->skin_scroll = max_scroll;
+
+    for (int i = s->skin_scroll; i < s->skin_count && i - s->skin_scroll < rows_visible; i++) {
+        SDL_Rect r = { c.x, c.y + (i - s->skin_scroll) * rh, c.w, rh };
+        bool is_current = (i == s->current_skin);
+        bool is_hover   = (i == s->hover_skin);
+        if (is_current)    fill(ren, r, dim_c(skin->theme_accent, 0.18f));
+        else if (is_hover) fill(ren, r, dim_c(skin->theme_panel, 0.7f));
+
+        // tag prefix marks the active skin
+        const char* tag = is_current ? " * " : "   ";
+        SDL_Color name_c = is_current ? skin->theme_accent : skin->theme_text;
+        font_draw(ren, r.x + 8,  r.y + (r.h - FONT_H) / 2, 1, name_c, tag);
+        font_draw(ren, r.x + 32, r.y + (r.h - FONT_H) / 2, 1, name_c, s->skins[i].name);
     }
 }
 
@@ -267,6 +343,7 @@ void settings_render(Settings* s, SDL_Renderer* ren, const Skin* skin) {
     }
 
     if (s->tab == SET_TAB_THEMES)       render_themes_tab(s, ren, skin);
+    else if (s->tab == SET_TAB_SKINS)   render_skins_tab(s, ren, skin);
     else if (s->tab == SET_TAB_OPTIONS) render_options_tab(s, ren, skin);
     else if (s->tab == SET_TAB_ABOUT)   render_about_tab(s, ren, skin);
 

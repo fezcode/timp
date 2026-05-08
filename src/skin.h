@@ -128,4 +128,15 @@ void skin_destroy(Skin* skin);
 
 int skin_button_at(const Skin* skin, int x, int y);
 
+// One available skin discovered by skin_scan(). `path` is absolute and points
+// to the skin's skin.ini; pass it directly to skin_load.
+typedef struct {
+    char name[64];
+    char path[300];
+} SkinEntry;
+
+// Scans <exe-dir>/skins/<*>/skin.ini and fills `out` (up to `max` entries).
+// Returns the number written.
+int skin_scan(SkinEntry* out, int max);
+
 #endif
