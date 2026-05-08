@@ -24,10 +24,18 @@ $winLibs = '-lole32','-lwinmm','-lm'
 New-Item -ItemType Directory -Force -Path build | Out-Null
 
 $srcs = 'main','audio','skin','ui','ini','font','playlist','filebrowser','fft','eq','theme','settings','config','vendor'
+
+# Newest-header timestamp — any .h change invalidates every .o.
+# Without this, edits to (e.g.) skin.h leave stale .o files compiled against
+# the old struct layout, which produces silent memory corruption at runtime.
+$newestHeader = (Get-ChildItem src\*.h | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
 foreach ($s in $srcs) {
     $src = "src\$s.c"
     $obj = "build\$s.o"
-    if ((Test-Path $obj) -and (Get-Item $obj).LastWriteTime -gt (Get-Item $src).LastWriteTime) {
+    $upToDate = (Test-Path $obj) -and
+                (Get-Item $obj).LastWriteTime -gt (Get-Item $src).LastWriteTime -and
+                (Get-Item $obj).LastWriteTime -gt $newestHeader
+    if ($upToDate) {
         Write-Output "up-to-date $s"
         continue
     }

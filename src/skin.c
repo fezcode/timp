@@ -24,6 +24,9 @@ void skin_default(Skin* skin) {
     snprintf(skin->name, sizeof(skin->name), "%s", "builtin");
     skin->window_w = 300;
     skin->window_h = 188;
+    skin->compact_h = 88;
+    skin->modal_w   = 520;
+    skin->modal_h   = 380;
 
     // Title bar / drag region (settings + min + close on the right)
     skin->drag_region.rect = (SDL_Rect){ 0, 0, 252, 14 };
@@ -81,12 +84,74 @@ void skin_default(Skin* skin) {
     skin->theme_panel  = make_color(28, 36, 46, 255);
     skin->theme_accent = make_color(80, 255, 130, 255);
     skin->theme_text   = make_color(200, 220, 230, 255);
+
+    // Font: built-in bitmap (sprite-sheet override is opt-in via skin.ini).
+    skin->font.tex = NULL;
+    skin->font.cell_w = 5;
+    skin->font.cell_h = 7;
+    skin->font.draw_w = 5;
+    skin->font.draw_h = 7;
+    skin->font.cols = 16;
+    skin->font.rows = 6;
+    skin->font.first_char = 32;
+    skin->font.gap_x = 1;
+
+    // File browser layout (matches what the renderer used to hardcode).
+    skin->fb.header_h  = 22;
+    skin->fb.footer_h  = 22;
+    skin->fb.row_h     = 14;
+    skin->fb.open_btn   = (SDL_Rect){ 0, 0, 0, 0 };  // 0 → derived from modal_w
+    skin->fb.cancel_btn = (SDL_Rect){ 0, 0, 0, 0 };
+
+    // Settings layout.
+    skin->set.header_h = 16;
+    skin->set.tab_h    = 18;
+    skin->set.footer_h = 22;
+    skin->set.row_h    = 16;
+    skin->set.close_btn = (SDL_Rect){ 0, 0, 0, 0 };
+
+    // EQ panel layout.
+    skin->eq.slider_top    = 34;
+    skin->eq.slider_bottom = 148;
+    skin->eq.slider_w      = 8;
+    skin->eq.track_w       = 4;
+    skin->eq.title_y       = 20;
+    skin->eq.label_y       = 154;   // slider_bottom + 6
+    skin->eq.readout_y     = 164;   // slider_bottom + 16
+    skin->eq.onoff_btn = (SDL_Rect){ 0, 0, 0, 0 };
+    skin->eq.flat_btn  = (SDL_Rect){ 0, 0, 0, 0 };
+    skin->eq.back_btn  = (SDL_Rect){ 0, 0, 0, 0 };
+
+    // Playlist panel layout.
+    skin->pl.header_h = 12;
+    skin->pl.row_h    = 11;
 }
 
-static SDL_Texture* load_texture(SDL_Renderer* ren, const char* path, int* out_w, int* out_h) {
+// Loads a PNG/BMP/JPEG into an RGBA streaming texture. For glyph sheets we
+// also normalize: pixel alpha = max(R,G,B) so plain black-on-white sheets
+// (no alpha channel) still render correctly when tinted.
+static SDL_Texture* load_texture(SDL_Renderer* ren, const char* path,
+                                 int* out_w, int* out_h, bool as_mask) {
     int w, h, ch;
     unsigned char* pixels = stbi_load(path, &w, &h, &ch, 4);
     if (!pixels) return NULL;
+    if (as_mask) {
+        for (int i = 0; i < w * h; i++) {
+            unsigned char r = pixels[i*4 + 0];
+            unsigned char g = pixels[i*4 + 1];
+            unsigned char b = pixels[i*4 + 2];
+            unsigned char a = pixels[i*4 + 3];
+            unsigned char lum = r > g ? r : g;
+            if (b > lum) lum = b;
+            // If the source had an alpha channel, prefer it when it's nonzero;
+            // otherwise treat luminance as the mask.
+            unsigned char mask = (a > 0 && a < 255) ? a : lum;
+            pixels[i*4 + 0] = 255;
+            pixels[i*4 + 1] = 255;
+            pixels[i*4 + 2] = 255;
+            pixels[i*4 + 3] = mask;
+        }
+    }
     SDL_Texture* tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32,
                                          SDL_TEXTUREACCESS_STATIC, w, h);
     if (!tex) { stbi_image_free(pixels); return NULL; }
@@ -107,6 +172,33 @@ static void parse_dir(const char* ini_path, char* out_dir, size_t out_size) {
     else snprintf(out_dir, out_size, ".");
 }
 
+static SDL_Texture* load_relative(SDL_Renderer* ren, const Skin* skin,
+                                  const char* relpath, int* out_w, int* out_h,
+                                  bool as_mask) {
+    char path[520];
+    snprintf(path, sizeof(path), "%s/%s", skin->dir, relpath);
+    return load_texture(ren, path, out_w, out_h, as_mask);
+}
+
+static void load_button(const Ini* ini, SkinButton* b, const char* sec) {
+    int x, y, w, h;
+    if (ini_get_rect(ini, sec, "hit", &x, &y, &w, &h)) {
+        b->hit = (SDL_Rect){ x, y, w, h };
+        b->defined = true;
+    }
+    if (ini_get_rect(ini, sec, "normal", &x, &y, &w, &h)) {
+        b->normal = (SDL_Rect){ x, y, w, h };
+    }
+    if (ini_get_rect(ini, sec, "pressed", &x, &y, &w, &h)) {
+        b->pressed = (SDL_Rect){ x, y, w, h };
+        b->has_pressed = true;
+    }
+    if (ini_get_rect(ini, sec, "hover", &x, &y, &w, &h)) {
+        b->hover = (SDL_Rect){ x, y, w, h };
+        b->has_hover = true;
+    }
+}
+
 bool skin_load(Skin* skin, SDL_Renderer* ren, const char* ini_path) {
     skin_default(skin);
 
@@ -118,16 +210,26 @@ bool skin_load(Skin* skin, SDL_Renderer* ren, const char* ini_path) {
     const char* name = ini_get(&ini, "meta", "name");
     if (name) snprintf(skin->name, sizeof(skin->name), "%s", name);
 
-    skin->window_w = ini_get_int(&ini, "window", "width", skin->window_w);
-    skin->window_h = ini_get_int(&ini, "window", "height", skin->window_h);
+    skin->window_w  = ini_get_int(&ini, "window", "width",  skin->window_w);
+    skin->window_h  = ini_get_int(&ini, "window", "height", skin->window_h);
+    skin->compact_h = ini_get_int(&ini, "window", "compact_height", skin->compact_h);
+    skin->modal_w   = ini_get_int(&ini, "window", "modal_width",  skin->modal_w);
+    skin->modal_h   = ini_get_int(&ini, "window", "modal_height", skin->modal_h);
 
     const char* bg = ini_get(&ini, "window", "background");
     if (bg && *bg) {
-        char path[520];
-        snprintf(path, sizeof(path), "%s/%s", skin->dir, bg);
-        skin->bg_tex = load_texture(ren, path, &skin->bg_w, &skin->bg_h);
+        skin->bg_tex = load_relative(ren, skin, bg, &skin->bg_w, &skin->bg_h, false);
     }
 
+    // Shared transport-button sprite sheet (optional). Per-button rects refer
+    // into this texture unless that button has its own [button.X] sheet=...
+    const char* btn_sheet = ini_get(&ini, "buttons", "sheet");
+    if (btn_sheet && *btn_sheet) {
+        int bw, bh;
+        skin->btn_sheet = load_relative(ren, skin, btn_sheet, &bw, &bh, false);
+    }
+
+    // Buttons: only override defaults when the file actually defines any.
     bool any_button_in_file = false;
     for (int i = 0; i < BTN_COUNT; i++) {
         if (ini_get(&ini, btn_section[i], "hit")) { any_button_in_file = true; break; }
@@ -135,15 +237,14 @@ bool skin_load(Skin* skin, SDL_Renderer* ren, const char* ini_path) {
     if (any_button_in_file) {
         for (int i = 0; i < BTN_COUNT; i++) {
             SkinButton* b = &skin->buttons[i];
+            SDL_Texture* prev_sheet = b->sheet;
             memset(b, 0, sizeof(*b));
-            int x, y, w, h;
-            if (ini_get_rect(&ini, btn_section[i], "hit", &x, &y, &w, &h)) {
-                b->hit = (SDL_Rect){ x, y, w, h };
-                b->defined = true;
-                if (ini_get_rect(&ini, btn_section[i], "normal", &x, &y, &w, &h))
-                    b->normal = (SDL_Rect){ x, y, w, h };
-                if (ini_get_rect(&ini, btn_section[i], "pressed", &x, &y, &w, &h))
-                    b->pressed = (SDL_Rect){ x, y, w, h };
+            b->sheet = prev_sheet;
+            load_button(&ini, b, btn_section[i]);
+            const char* sheet = ini_get(&ini, btn_section[i], "sheet");
+            if (sheet && *sheet) {
+                int sw, sh;
+                b->sheet = load_relative(ren, skin, sheet, &sw, &sh, false);
             }
         }
     }
@@ -179,12 +280,77 @@ bool skin_load(Skin* skin, SDL_Renderer* ren, const char* ini_path) {
     if (ini_get_color(&ini, "theme", "text", &r, &g, &b))
         skin->theme_text = make_color(r, g, b, 255);
 
+    // Optional bitmap font sprite sheet.
+    const char* font_sheet = ini_get(&ini, "font", "sheet");
+    if (font_sheet && *font_sheet) {
+        int fw, fh;
+        skin->font.tex = load_relative(ren, skin, font_sheet, &fw, &fh, true);
+        skin->font.cell_w     = ini_get_int(&ini, "font", "cell_w",     skin->font.cell_w);
+        skin->font.cell_h     = ini_get_int(&ini, "font", "cell_h",     skin->font.cell_h);
+        skin->font.cols       = ini_get_int(&ini, "font", "cols",       skin->font.cols);
+        skin->font.rows       = ini_get_int(&ini, "font", "rows",       skin->font.rows);
+        skin->font.first_char = ini_get_int(&ini, "font", "first_char", skin->font.first_char);
+        skin->font.gap_x      = ini_get_int(&ini, "font", "gap_x",      skin->font.gap_x);
+        skin->font.draw_w     = ini_get_int(&ini, "font", "draw_w",     skin->font.cell_w);
+        skin->font.draw_h     = ini_get_int(&ini, "font", "draw_h",     skin->font.cell_h);
+    }
+
+    // File browser layout overrides (all optional).
+    skin->fb.header_h = ini_get_int(&ini, "filebrowser", "header_h", skin->fb.header_h);
+    skin->fb.footer_h = ini_get_int(&ini, "filebrowser", "footer_h", skin->fb.footer_h);
+    skin->fb.row_h    = ini_get_int(&ini, "filebrowser", "row_h",    skin->fb.row_h);
+    int x, y, w, h;
+    if (ini_get_rect(&ini, "filebrowser", "open_btn", &x, &y, &w, &h))
+        skin->fb.open_btn = (SDL_Rect){ x, y, w, h };
+    if (ini_get_rect(&ini, "filebrowser", "cancel_btn", &x, &y, &w, &h))
+        skin->fb.cancel_btn = (SDL_Rect){ x, y, w, h };
+
+    // Settings modal layout overrides.
+    skin->set.header_h = ini_get_int(&ini, "settings", "header_h", skin->set.header_h);
+    skin->set.tab_h    = ini_get_int(&ini, "settings", "tab_h",    skin->set.tab_h);
+    skin->set.footer_h = ini_get_int(&ini, "settings", "footer_h", skin->set.footer_h);
+    skin->set.row_h    = ini_get_int(&ini, "settings", "row_h",    skin->set.row_h);
+    if (ini_get_rect(&ini, "settings", "close_btn", &x, &y, &w, &h))
+        skin->set.close_btn = (SDL_Rect){ x, y, w, h };
+
+    // EQ layout overrides.
+    skin->eq.slider_top    = ini_get_int(&ini, "eq", "slider_top",    skin->eq.slider_top);
+    skin->eq.slider_bottom = ini_get_int(&ini, "eq", "slider_bottom", skin->eq.slider_bottom);
+    skin->eq.slider_w      = ini_get_int(&ini, "eq", "slider_w",      skin->eq.slider_w);
+    skin->eq.track_w       = ini_get_int(&ini, "eq", "track_w",       skin->eq.track_w);
+    skin->eq.title_y       = ini_get_int(&ini, "eq", "title_y",       skin->eq.title_y);
+    skin->eq.label_y       = ini_get_int(&ini, "eq", "label_y",       skin->eq.label_y);
+    skin->eq.readout_y     = ini_get_int(&ini, "eq", "readout_y",     skin->eq.readout_y);
+    if (ini_get_rect(&ini, "eq", "onoff_btn", &x, &y, &w, &h))
+        skin->eq.onoff_btn = (SDL_Rect){ x, y, w, h };
+    if (ini_get_rect(&ini, "eq", "flat_btn", &x, &y, &w, &h))
+        skin->eq.flat_btn = (SDL_Rect){ x, y, w, h };
+    if (ini_get_rect(&ini, "eq", "back_btn", &x, &y, &w, &h))
+        skin->eq.back_btn = (SDL_Rect){ x, y, w, h };
+
+    // Playlist layout overrides.
+    skin->pl.header_h = ini_get_int(&ini, "playlist", "header_h", skin->pl.header_h);
+    skin->pl.row_h    = ini_get_int(&ini, "playlist", "row_h",    skin->pl.row_h);
+
     ini_free(&ini);
     return true;
 }
 
 void skin_destroy(Skin* skin) {
-    if (skin->bg_tex) SDL_DestroyTexture(skin->bg_tex);
+    if (skin->bg_tex)     SDL_DestroyTexture(skin->bg_tex);
+    if (skin->btn_sheet)  SDL_DestroyTexture(skin->btn_sheet);
+    if (skin->font.tex)   SDL_DestroyTexture(skin->font.tex);
+    for (int i = 0; i < BTN_COUNT; i++) {
+        SDL_Texture* s = skin->buttons[i].sheet;
+        if (!s) continue;
+        if (s == skin->btn_sheet || s == skin->bg_tex) continue;
+        // Avoid double-free if multiple buttons happen to share the same loaded sheet.
+        bool dup = false;
+        for (int j = 0; j < i; j++) {
+            if (skin->buttons[j].sheet == s) { dup = true; break; }
+        }
+        if (!dup) SDL_DestroyTexture(s);
+    }
     memset(skin, 0, sizeof(*skin));
 }
 

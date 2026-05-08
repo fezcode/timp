@@ -1,4 +1,5 @@
 #include "font.h"
+#include "skin.h"
 
 #include <ctype.h>
 #include <stdint.h>
@@ -73,9 +74,38 @@ static const uint8_t* glyph_for(unsigned char c) {
     return glyphs[c - 32];
 }
 
-void font_draw(SDL_Renderer* ren, int x, int y, int scale,
-               SDL_Color color, const char* text) {
+static const Skin* g_skin = NULL;
+
+void font_set_skin(const Skin* skin) { g_skin = skin; }
+
+static bool sheet_active(void) {
+    return g_skin && g_skin->font.tex && g_skin->font.cell_w > 0 && g_skin->font.cell_h > 0;
+}
+
+static int draw_w_unscaled(void) {
+    if (sheet_active()) return g_skin->font.draw_w;
+    return FONT_W;
+}
+static int draw_h_unscaled(void) {
+    if (sheet_active()) return g_skin->font.draw_h;
+    return FONT_H;
+}
+static int gap_unscaled(void) {
+    if (sheet_active()) return g_skin->font.gap_x;
+    return 1;
+}
+
+int font_glyph_w(int scale) {
     if (scale < 1) scale = 1;
+    return draw_w_unscaled() * scale;
+}
+int font_glyph_h(int scale) {
+    if (scale < 1) scale = 1;
+    return draw_h_unscaled() * scale;
+}
+
+static void draw_builtin(SDL_Renderer* ren, int x, int y, int scale,
+                         SDL_Color color, const char* text) {
     SDL_SetRenderDrawColor(ren, color.r, color.g, color.b, color.a);
     int cx = x;
     for (const char* p = text; *p; p++) {
@@ -93,9 +123,45 @@ void font_draw(SDL_Renderer* ren, int x, int y, int scale,
     }
 }
 
+static void draw_sheet(SDL_Renderer* ren, int x, int y, int scale,
+                       SDL_Color color, const char* text) {
+    const SkinFont* f = &g_skin->font;
+    SDL_SetTextureColorMod(f->tex, color.r, color.g, color.b);
+    SDL_SetTextureAlphaMod(f->tex, color.a);
+    int cx = x;
+    int dw = f->draw_w * scale;
+    int dh = f->draw_h * scale;
+    int adv = (f->draw_w + f->gap_x) * scale;
+    for (const char* p = text; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        // Sprite fonts are typically uppercase-only; fold lowercase up.
+        if (c >= 'a' && c <= 'z') c = (unsigned char)(c - 'a' + 'A');
+        int idx = (int)c - f->first_char;
+        if (idx < 0 || idx >= f->cols * f->rows) {
+            cx += adv;
+            continue;
+        }
+        int col = idx % f->cols;
+        int row = idx / f->cols;
+        SDL_Rect src = { col * f->cell_w, row * f->cell_h, f->cell_w, f->cell_h };
+        SDL_Rect dst = { cx, y, dw, dh };
+        SDL_RenderCopy(ren, f->tex, &src, &dst);
+        cx += adv;
+    }
+}
+
+void font_draw(SDL_Renderer* ren, int x, int y, int scale,
+               SDL_Color color, const char* text) {
+    if (scale < 1) scale = 1;
+    if (sheet_active()) draw_sheet(ren, x, y, scale, color, text);
+    else                draw_builtin(ren, x, y, scale, color, text);
+}
+
 int font_text_width(int scale, const char* text) {
     if (scale < 1) scale = 1;
     int n = (int)strlen(text);
     if (n <= 0) return 0;
-    return n * (FONT_W + 1) * scale - scale;
+    int w = draw_w_unscaled();
+    int gap = gap_unscaled();
+    return n * (w + gap) * scale - gap * scale;
 }

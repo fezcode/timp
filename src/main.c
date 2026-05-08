@@ -176,11 +176,12 @@ int main(int argc, char** argv) {
 #endif
 
     // Window-size juggling. Three states:
-    //   modal (file browser or settings open) -> larger window
-    //   playlist visible                       -> compact + playlist
-    //   playlist hidden                        -> compact only
-    const int MODAL_WIN_W = 520, MODAL_WIN_H = 380;
-    const int PLAYER_NO_PL_H = 88;  // y where the playlist panel starts in default skin
+    //   modal (file browser or settings open) -> modal_w x modal_h from skin
+    //   playlist visible                       -> window_w x window_h from skin
+    //   playlist hidden                        -> window_w x compact_h from skin
+    const int MODAL_WIN_W = skin.modal_w   > 0 ? skin.modal_w   : 520;
+    const int MODAL_WIN_H = skin.modal_h   > 0 ? skin.modal_h   : 380;
+    const int PLAYER_NO_PL_H = skin.compact_h > 0 ? skin.compact_h : 88;
     int orig_skin_w = skin.window_w;
     int orig_skin_h = skin.window_h;  // full height with playlist
     SDL_Rect orig_btn_min   = skin.buttons[BTN_MIN].hit;

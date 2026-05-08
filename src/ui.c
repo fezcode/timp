@@ -24,26 +24,26 @@ void ui_init(UI* ui, SDL_Renderer* ren, Skin* skin) {
     snprintf(ui->display_title, sizeof(ui->display_title), "%s", "TIMP - DROP A FILE");
     fb_init(&ui->fb);
     settings_init(&ui->settings);
+    font_set_skin(skin);
 }
 
 // ----- EQ panel layout -----
-// y=0..14: drag region (shared with main UI)
-// y=18..30: header (title + ON/OFF + FLAT + BACK buttons)
-// y=34..148: 10 vertical sliders (114px high)
-// y=152..160: freq labels
-// y=164..174: dB readouts
-
-#define EQ_SLIDER_TOP    34
-#define EQ_SLIDER_BOTTOM 148
-#define EQ_SLIDER_W       8
-#define EQ_TRACK_W        4
+// All sizes flow from skin->eq; defaults match the original look:
+//   y=0..14: drag region (shared with main UI)
+//   y=18..30: header (title + ON/OFF + FLAT + BACK buttons)
+//   y=34..148: 10 vertical sliders (114px high)
+//   y=152..160: freq labels
+//   y=164..174: dB readouts
 
 static SDL_Rect eq_slider_track_rect(const Skin* sk, int band) {
-    int margin = 14;
-    int total_w = sk->window_w - 2 * margin;
-    int spacing = total_w / EQ_BANDS;
-    int cx = margin + spacing * band + spacing / 2;
-    SDL_Rect r = { cx - EQ_TRACK_W / 2, EQ_SLIDER_TOP, EQ_TRACK_W, EQ_SLIDER_BOTTOM - EQ_SLIDER_TOP };
+    int margin   = 14;
+    int track_w  = sk->eq.track_w > 0 ? sk->eq.track_w : 4;
+    int total_w  = sk->window_w - 2 * margin;
+    int spacing  = total_w / EQ_BANDS;
+    int cx       = margin + spacing * band + spacing / 2;
+    int top      = sk->eq.slider_top    > 0 ? sk->eq.slider_top    : 34;
+    int bottom   = sk->eq.slider_bottom > 0 ? sk->eq.slider_bottom : 148;
+    SDL_Rect r = { cx - track_w / 2, top, track_w, bottom - top };
     return r;
 }
 
@@ -65,13 +65,28 @@ static float eq_y_to_gain(SDL_Rect track, int y) {
     return t * 24.f - 12.f;
 }
 
-static SDL_Rect eq_btn_onoff(const Skin* sk) { return (SDL_Rect){ sk->window_w - 132, 18, 40, 12 }; }
-static SDL_Rect eq_btn_flat(const Skin* sk)  { return (SDL_Rect){ sk->window_w - 88, 18, 36, 12 }; }
-static SDL_Rect eq_btn_back(const Skin* sk)  { return (SDL_Rect){ sk->window_w - 48, 18, 40, 12 }; }
+static SDL_Rect eq_btn_onoff(const Skin* sk) {
+    if (sk->eq.onoff_btn.w > 0) return sk->eq.onoff_btn;
+    return (SDL_Rect){ sk->window_w - 132, 18, 40, 12 };
+}
+static SDL_Rect eq_btn_flat(const Skin* sk) {
+    if (sk->eq.flat_btn.w > 0) return sk->eq.flat_btn;
+    return (SDL_Rect){ sk->window_w - 88, 18, 36, 12 };
+}
+static SDL_Rect eq_btn_back(const Skin* sk) {
+    if (sk->eq.back_btn.w > 0) return sk->eq.back_btn;
+    return (SDL_Rect){ sk->window_w - 48, 18, 40, 12 };
+}
 
-
-#define PL_HEADER_H 12
-#define PL_ROW_H 11
+// Playlist row metrics: skin override > built-in defaults.
+#define PL_HEADER_H_DEFAULT 12
+#define PL_ROW_H_DEFAULT    11
+static int pl_header_h(const Skin* sk) {
+    return sk->pl.header_h > 0 ? sk->pl.header_h : PL_HEADER_H_DEFAULT;
+}
+static int pl_row_h(const Skin* sk) {
+    return sk->pl.row_h > 0 ? sk->pl.row_h : PL_ROW_H_DEFAULT;
+}
 
 static const char* pl_basename(const char* path) {
     const char* s = strrchr(path, '/');
@@ -82,8 +97,8 @@ static const char* pl_basename(const char* path) {
 
 static int pl_visible_rows(const Skin* sk) {
     if (!sk->playlist_rect.defined) return 0;
-    int avail = sk->playlist_rect.rect.h - PL_HEADER_H;
-    return avail / PL_ROW_H;
+    int avail = sk->playlist_rect.rect.h - pl_header_h(sk);
+    return avail / pl_row_h(sk);
 }
 
 static int pl_clamp_scroll(int scroll, int total, int rows) {
@@ -289,8 +304,10 @@ UiAction ui_handle_event(UI* ui, const SDL_Event* e, Audio* audio, Playlist* pl)
 
     // Playlist panel hover/scroll/click — handled before main button hit-testing.
     if (sk->playlist_rect.defined) {
+        int pl_hh = pl_header_h(sk);
+        int pl_rh = pl_row_h(sk);
         SDL_Rect plr = sk->playlist_rect.rect;
-        SDL_Rect rows = { plr.x, plr.y + PL_HEADER_H, plr.w, plr.h - PL_HEADER_H };
+        SDL_Rect rows = { plr.x, plr.y + pl_hh, plr.w, plr.h - pl_hh };
         int rows_visible = pl_visible_rows(sk);
         const int X_W = 12;  // width of the [x] hit zone at the right of each row
 
@@ -298,7 +315,7 @@ UiAction ui_handle_event(UI* ui, const SDL_Event* e, Audio* audio, Playlist* pl)
             int mx = e->motion.x, my = e->motion.y;
             int row_under = -1;
             if (mx >= rows.x && mx < rows.x + rows.w && my >= rows.y && my < rows.y + rows.h) {
-                int row = (my - rows.y) / PL_ROW_H;
+                int row = (my - rows.y) / pl_rh;
                 int idx = ui->pl_scroll + row;
                 if (idx >= 0 && idx < playlist_count(pl)) row_under = idx;
             }
@@ -317,9 +334,9 @@ UiAction ui_handle_event(UI* ui, const SDL_Event* e, Audio* audio, Playlist* pl)
                 // Map to drop slot: clamp so we can drop at the very end.
                 int target;
                 if (my < rows.y) target = ui->pl_scroll;
-                else if (my >= rows.y + rows_visible * PL_ROW_H) target = playlist_count(pl) - 1;
+                else if (my >= rows.y + rows_visible * pl_rh) target = playlist_count(pl) - 1;
                 else {
-                    int row = (my - rows.y) / PL_ROW_H;
+                    int row = (my - rows.y) / pl_rh;
                     target = ui->pl_scroll + row;
                 }
                 if (target < 0) target = 0;
@@ -337,7 +354,7 @@ UiAction ui_handle_event(UI* ui, const SDL_Event* e, Audio* audio, Playlist* pl)
         } else if (e->type == SDL_MOUSEBUTTONDOWN && e->button.button == SDL_BUTTON_LEFT) {
             int mx = e->button.x, my = e->button.y;
             if (mx >= rows.x && mx < rows.x + rows.w && my >= rows.y && my < rows.y + rows.h) {
-                int row = (my - rows.y) / PL_ROW_H;
+                int row = (my - rows.y) / pl_rh;
                 int idx = ui->pl_scroll + row;
                 if (idx < 0 || idx >= playlist_count(pl)) return act;
 
@@ -379,7 +396,7 @@ UiAction ui_handle_event(UI* ui, const SDL_Event* e, Audio* audio, Playlist* pl)
         } else if (e->type == SDL_MOUSEBUTTONDOWN && e->button.button == SDL_BUTTON_RIGHT) {
             int mx = e->button.x, my = e->button.y;
             if (mx >= rows.x && mx < rows.x + rows.w && my >= rows.y && my < rows.y + rows.h) {
-                int row = (my - rows.y) / PL_ROW_H;
+                int row = (my - rows.y) / pl_rh;
                 int idx = ui->pl_scroll + row;
                 if (idx >= 0 && idx < playlist_count(pl)) {
                     bool removed_current = playlist_remove(pl, idx);
@@ -755,10 +772,17 @@ static void render_button(UI* ui, ButtonId id, Audio* audio, Playlist* pl) {
     bool hovered = (ui->hover_btn == (int)id) && !pressed;
     SDL_Rect hit = btn->hit;
 
-    if (sk->bg_tex && (btn->normal.w > 0 || btn->pressed.w > 0)) {
-        SDL_Rect src = pressed && btn->pressed.w ? btn->pressed : btn->normal;
+    // Sprite-sheet path. Source-rect resolution order:
+    //   per-button sheet > shared transport sheet > window bg sheet (legacy).
+    SDL_Texture* sheet = btn->sheet;
+    if (!sheet) sheet = sk->btn_sheet;
+    if (!sheet) sheet = sk->bg_tex;
+    if (sheet && (btn->normal.w > 0 || btn->has_pressed || btn->has_hover)) {
+        SDL_Rect src = btn->normal;
+        if (pressed && btn->has_pressed)      src = btn->pressed;
+        else if (hovered && btn->has_hover)   src = btn->hover;
         if (src.w > 0) {
-            SDL_RenderCopy(ui->ren, sk->bg_tex, &src, &hit);
+            SDL_RenderCopy(ui->ren, sheet, &src, &hit);
             return;
         }
     }
@@ -932,13 +956,15 @@ static void render_playlist(UI* ui, Playlist* pl) {
     Skin* sk = ui->skin;
     if (!sk->playlist_rect.defined) return;
     SDL_Rect r = sk->playlist_rect.rect;
+    int pl_hh = pl_header_h(sk);
+    int pl_rh = pl_row_h(sk);
 
     // Outer panel
     fill_rect(ui->ren, r, (SDL_Color){ 6, 10, 14, 255 });
     draw_rect(ui->ren, r, dim(sk->theme_accent, 0.33f));
 
     // Header
-    SDL_Rect head = { r.x + 1, r.y + 1, r.w - 2, PL_HEADER_H - 1 };
+    SDL_Rect head = { r.x + 1, r.y + 1, r.w - 2, pl_hh - 1 };
     fill_rect(ui->ren, head, dim(sk->theme_panel, 0.85f));
     SDL_SetRenderDrawColor(ui->ren, sk->theme_accent.r, sk->theme_accent.g, sk->theme_accent.b, 80);
     SDL_RenderDrawLine(ui->ren, head.x, head.y + head.h, head.x + head.w, head.y + head.h);
@@ -949,7 +975,7 @@ static void render_playlist(UI* ui, Playlist* pl) {
     font_draw(ui->ren, head.x + 4, head.y + (head.h - FONT_H) / 2, 1, sk->theme_accent, hdr);
 
     // Rows
-    SDL_Rect rows_rect = { r.x + 1, r.y + PL_HEADER_H, r.w - 2, r.h - PL_HEADER_H - 1 };
+    SDL_Rect rows_rect = { r.x + 1, r.y + pl_hh, r.w - 2, r.h - pl_hh - 1 };
     int rows_visible = pl_visible_rows(sk);
     ui->pl_scroll = pl_clamp_scroll(ui->pl_scroll, total, rows_visible);
 
@@ -958,7 +984,7 @@ static void render_playlist(UI* ui, Playlist* pl) {
     for (int row = 0; row < rows_visible; row++) {
         int idx = ui->pl_scroll + row;
         if (idx >= total) break;
-        SDL_Rect rrow = { rows_rect.x, rows_rect.y + row * PL_ROW_H, rows_rect.w, PL_ROW_H };
+        SDL_Rect rrow = { rows_rect.x, rows_rect.y + row * pl_rh, rows_rect.w, pl_rh };
 
         bool is_current = (idx == cur);
         bool is_hover   = (idx == ui->pl_hover);
@@ -1009,8 +1035,8 @@ static void render_playlist(UI* ui, Playlist* pl) {
     if (ui->pl_drag_idx >= 0 && ui->pl_drag_target >= 0) {
         int t = ui->pl_drag_target;
         if (t >= ui->pl_scroll && t < ui->pl_scroll + rows_visible) {
-            int line_y = rows_rect.y + (t - ui->pl_scroll) * PL_ROW_H;
-            if (ui->pl_drag_target > ui->pl_drag_idx) line_y += PL_ROW_H;  // drop below
+            int line_y = rows_rect.y + (t - ui->pl_scroll) * pl_rh;
+            if (ui->pl_drag_target > ui->pl_drag_idx) line_y += pl_rh;  // drop below
             SDL_Rect line = { rows_rect.x + 2, line_y - 1, rows_rect.w - 4, 2 };
             fill_rect(ui->ren, line, sk->theme_accent);
         }
@@ -1077,7 +1103,10 @@ static void render_eq(UI* ui, Audio* audio) {
     }
 
     // Header line: "EQUALIZER" + ON/OFF + FLAT + BACK
-    font_draw(ui->ren, 8, 20, 1, sk->theme_accent, "EQUALIZER");
+    int eq_title_y = sk->eq.title_y > 0 ? sk->eq.title_y : 20;
+    int eq_label_y = sk->eq.label_y > 0 ? sk->eq.label_y : (sk->eq.slider_bottom + 6);
+    int eq_readout_y = sk->eq.readout_y > 0 ? sk->eq.readout_y : (sk->eq.slider_bottom + 16);
+    font_draw(ui->ren, 8, eq_title_y, 1, sk->theme_accent, "EQUALIZER");
 
     SDL_Color on_face  = eq_is_enabled(eq) ? sk->theme_accent : dim(sk->theme_panel, 0.85f);
     SDL_Color on_text  = eq_is_enabled(eq) ? sk->theme_bg : sk->theme_text;
@@ -1123,7 +1152,7 @@ static void render_eq(UI* ui, Audio* audio) {
 
         // freq label below
         int label_w = font_text_width(1, labels[b]);
-        font_draw(ui->ren, tr.x + (tr.w - label_w) / 2, EQ_SLIDER_BOTTOM + 6,
+        font_draw(ui->ren, tr.x + (tr.w - label_w) / 2, eq_label_y,
                   1, sk->theme_text, labels[b]);
 
         // dB readout — shown for whatever's currently being dragged, otherwise for all if non-zero
@@ -1134,7 +1163,7 @@ static void render_eq(UI* ui, Audio* audio) {
         if (db[0]) {
             int dw = font_text_width(1, db);
             SDL_Color dc = (b == ui->eq_drag_band) ? sk->theme_accent : dim(sk->theme_text, 0.7f);
-            font_draw(ui->ren, tr.x + (tr.w - dw) / 2, EQ_SLIDER_BOTTOM + 16, 1, dc, db);
+            font_draw(ui->ren, tr.x + (tr.w - dw) / 2, eq_readout_y, 1, dc, db);
         }
     }
 }

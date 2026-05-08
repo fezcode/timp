@@ -5,10 +5,12 @@
 #include <stdio.h>
 #include <string.h>
 
-#define HEADER_H 16
-#define TAB_H    18
-#define FOOTER_H 22
-#define ROW_H    16
+// Layout pulled from the skin's [settings] block, with built-in defaults so
+// older skin.ini files keep working unchanged.
+static int set_header_h(const Skin* sk) { return sk->set.header_h > 0 ? sk->set.header_h : 16; }
+static int set_tab_h(const Skin* sk)    { return sk->set.tab_h    > 0 ? sk->set.tab_h    : 18; }
+static int set_footer_h(const Skin* sk) { return sk->set.footer_h > 0 ? sk->set.footer_h : 22; }
+static int set_row_h(const Skin* sk)    { return sk->set.row_h    > 0 ? sk->set.row_h    : 16; }
 
 static const char* TAB_NAMES[SET_TAB_COUNT] = { "THEMES", "OPTIONS", "ABOUT" };
 
@@ -47,18 +49,20 @@ void settings_close(Settings* s) { s->open = false; }
 static SDL_Rect tab_rect(const Skin* sk, int t) {
     int total = SET_TAB_COUNT;
     int w = (sk->window_w - 16) / total;
-    SDL_Rect r = { 8 + t * w, HEADER_H, w - 2, TAB_H };
+    SDL_Rect r = { 8 + t * w, set_header_h(sk), w - 2, set_tab_h(sk) };
     return r;
 }
 
 static SDL_Rect content_rect(const Skin* sk) {
-    SDL_Rect r = { 8, HEADER_H + TAB_H + 4, sk->window_w - 16,
-                   sk->window_h - HEADER_H - TAB_H - 4 - FOOTER_H };
+    int hh = set_header_h(sk), th = set_tab_h(sk), ff = set_footer_h(sk);
+    SDL_Rect r = { 8, hh + th + 4, sk->window_w - 16,
+                   sk->window_h - hh - th - 4 - ff };
     return r;
 }
 
 static SDL_Rect close_btn_rect(const Skin* sk) {
-    SDL_Rect r = { sk->window_w - 64, sk->window_h - FOOTER_H + 4, 56, 14 };
+    if (sk->set.close_btn.w > 0) return sk->set.close_btn;
+    SDL_Rect r = { sk->window_w - 64, sk->window_h - set_footer_h(sk) + 4, 56, 14 };
     return r;
 }
 
@@ -73,7 +77,8 @@ static const char* OPT_LABELS[OPT_COUNT] = { "ALWAYS ON TOP", "SHOW PLAYLIST" };
 
 static SDL_Rect option_row_rect(const Skin* sk, int i) {
     SDL_Rect c = content_rect(sk);
-    SDL_Rect r = { c.x, c.y + i * ROW_H, c.w, ROW_H };
+    int rh = set_row_h(sk);
+    SDL_Rect r = { c.x, c.y + i * rh, c.w, rh };
     return r;
 }
 static SDL_Rect option_check_rect(const Skin* sk, int i) {
@@ -86,7 +91,8 @@ static SDL_Rect option_check_rect(const Skin* sk, int i) {
 
 static SDL_Rect theme_row_rect(const Skin* sk, int i, int scroll) {
     SDL_Rect c = content_rect(sk);
-    SDL_Rect r = { c.x, c.y + (i - scroll) * ROW_H, c.w, ROW_H };
+    int rh = set_row_h(sk);
+    SDL_Rect r = { c.x, c.y + (i - scroll) * rh, c.w, rh };
     return r;
 }
 
@@ -115,7 +121,7 @@ void settings_handle_event(Settings* s, const SDL_Event* e, const Skin* skin) {
             }
         } else if (s->tab == SET_TAB_THEMES) {
             SDL_Rect c = content_rect(skin);
-            int rows_visible = c.h / ROW_H;
+            int rows_visible = c.h / set_row_h(skin);
             for (int i = s->theme_scroll; i < theme_count() && i < s->theme_scroll + rows_visible; i++) {
                 if (point_in(theme_row_rect(skin, i, s->theme_scroll), mx, my)) {
                     s->current_theme = i;
@@ -130,7 +136,7 @@ void settings_handle_event(Settings* s, const SDL_Event* e, const Skin* skin) {
             int mx = e->motion.x, my = e->motion.y;
             SDL_Rect c = content_rect(skin);
             if (mx >= c.x && mx < c.x + c.w && my >= c.y && my < c.y + c.h) {
-                int row = (my - c.y) / ROW_H;
+                int row = (my - c.y) / set_row_h(skin);
                 int idx = s->theme_scroll + row;
                 if (idx >= 0 && idx < theme_count()) s->hover_theme = idx;
             }
@@ -138,7 +144,7 @@ void settings_handle_event(Settings* s, const SDL_Event* e, const Skin* skin) {
     } else if (e->type == SDL_MOUSEWHEEL) {
         if (s->tab == SET_TAB_THEMES) {
             SDL_Rect c = content_rect(skin);
-            int rows_visible = c.h / ROW_H;
+            int rows_visible = c.h / set_row_h(skin);
             int max_scroll = theme_count() - rows_visible;
             if (max_scroll < 0) max_scroll = 0;
             s->theme_scroll -= e->wheel.y * 2;
@@ -166,7 +172,7 @@ static void render_themes_tab(Settings* s, SDL_Renderer* ren, const Skin* skin) 
     fill(ren, c, (SDL_Color){ 6, 10, 14, 255 });
     stroke(ren, c, dim_c(skin->theme_accent, 0.4f));
 
-    int rows_visible = c.h / ROW_H;
+    int rows_visible = c.h / set_row_h(skin);
     if (s->theme_scroll < 0) s->theme_scroll = 0;
     int max_scroll = theme_count() - rows_visible;
     if (max_scroll < 0) max_scroll = 0;
@@ -240,7 +246,7 @@ void settings_render(Settings* s, SDL_Renderer* ren, const Skin* skin) {
     fill(ren, full, skin->theme_bg);
 
     // Header
-    SDL_Rect hdr = { 0, 0, skin->window_w, HEADER_H };
+    SDL_Rect hdr = { 0, 0, skin->window_w, set_header_h(skin) };
     fill(ren, hdr, dim_c(skin->theme_panel, 0.8f));
     font_draw(ren, 8, 4, 1, skin->theme_accent, "SETTINGS");
 
@@ -265,7 +271,8 @@ void settings_render(Settings* s, SDL_Renderer* ren, const Skin* skin) {
     else if (s->tab == SET_TAB_ABOUT)   render_about_tab(s, ren, skin);
 
     // Footer + close button
-    SDL_Rect footer = { 0, skin->window_h - FOOTER_H, skin->window_w, FOOTER_H };
+    int ff = set_footer_h(skin);
+    SDL_Rect footer = { 0, skin->window_h - ff, skin->window_w, ff };
     fill(ren, footer, dim_c(skin->theme_panel, 0.8f));
 
     SDL_Rect cb = close_btn_rect(skin);

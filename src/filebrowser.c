@@ -370,24 +370,29 @@ static void fb_commit_selection(FileBrowser* fb, int fallback_idx) {
 }
 
 // ----- Rendering & input -----
+// All sizes flow from the skin's [filebrowser] block; defaults match the
+// classic 14-row/22-header/22-footer look.
 
-#define ROW_HEIGHT 14
-#define HEADER_H 22
-#define FOOTER_H 22
+static int fb_row_h(const Skin* sk)     { return sk->fb.row_h    > 0 ? sk->fb.row_h    : 14; }
+static int fb_header_h(const Skin* sk)  { return sk->fb.header_h > 0 ? sk->fb.header_h : 22; }
+static int fb_footer_h(const Skin* sk)  { return sk->fb.footer_h > 0 ? sk->fb.footer_h : 22; }
 
 static SDL_Rect list_rect(const Skin* skin) {
-    SDL_Rect r = { 8, HEADER_H + 4, skin->window_w - 16,
-                   skin->window_h - HEADER_H - FOOTER_H - 8 };
+    int hh = fb_header_h(skin), ff = fb_footer_h(skin);
+    SDL_Rect r = { 8, hh + 4, skin->window_w - 16,
+                   skin->window_h - hh - ff - 8 };
     return r;
 }
 
 static SDL_Rect cancel_rect(const Skin* skin) {
-    SDL_Rect r = { skin->window_w - 64, skin->window_h - FOOTER_H + 4, 56, 14 };
+    if (skin->fb.cancel_btn.w > 0) return skin->fb.cancel_btn;
+    SDL_Rect r = { skin->window_w - 64, skin->window_h - fb_footer_h(skin) + 4, 56, 14 };
     return r;
 }
 
 static SDL_Rect open_rect(const Skin* skin) {
-    SDL_Rect r = { skin->window_w - 128, skin->window_h - FOOTER_H + 4, 56, 14 };
+    if (skin->fb.open_btn.w > 0) return skin->fb.open_btn;
+    SDL_Rect r = { skin->window_w - 128, skin->window_h - fb_footer_h(skin) + 4, 56, 14 };
     return r;
 }
 
@@ -404,7 +409,8 @@ void fb_handle_event(FileBrowser* fb, const SDL_Event* e, const Skin* skin) {
     if (!fb->open) return;
 
     SDL_Rect lr = list_rect(skin);
-    fb->rows_visible = lr.h / ROW_HEIGHT;
+    int row_h = fb_row_h(skin);
+    fb->rows_visible = lr.h / row_h;
 
     // Path-edit mode: route all input to the text field.
     if (fb->path_edit) {
@@ -531,7 +537,7 @@ void fb_handle_event(FileBrowser* fb, const SDL_Event* e, const Skin* skin) {
         // mouse off the list shouldn't reset the keyboard cursor.
         int mx = e->motion.x, my = e->motion.y;
         if (mx >= lr.x && mx < lr.x + lr.w && my >= lr.y && my < lr.y + lr.h) {
-            int row = (my - lr.y) / ROW_HEIGHT;
+            int row = (my - lr.y) / row_h;
             int idx = fb->scroll + row;
             if (idx >= 0 && idx < fb->n_entries) fb->hover = idx;
         }
@@ -553,7 +559,7 @@ void fb_handle_event(FileBrowser* fb, const SDL_Event* e, const Skin* skin) {
             return;
         }
         if (mx >= lr.x && mx < lr.x + lr.w && my >= lr.y && my < lr.y + lr.h) {
-            int row = (my - lr.y) / ROW_HEIGHT;
+            int row = (my - lr.y) / row_h;
             int idx = fb->scroll + row;
             if (idx < 0 || idx >= fb->n_entries) return;
             FbEntry* en = &fb->entries[idx];
@@ -607,8 +613,12 @@ void fb_render(FileBrowser* fb, SDL_Renderer* ren, const Skin* skin) {
     SDL_Rect full = { 0, 0, skin->window_w, skin->window_h };
     fill(ren, full, skin->theme_bg);
 
+    int header_h = fb_header_h(skin);
+    int footer_h = fb_footer_h(skin);
+    int row_h    = fb_row_h(skin);
+
     // header
-    SDL_Rect header = { 0, 0, skin->window_w, HEADER_H };
+    SDL_Rect header = { 0, 0, skin->window_w, header_h };
     fill(ren, header, skin->theme_panel);
     font_draw(ren, 8, 4, 1, skin->theme_accent, "OPEN AUDIO");
 
@@ -645,7 +655,7 @@ void fb_render(FileBrowser* fb, SDL_Renderer* ren, const Skin* skin) {
     fill(ren, lr, (SDL_Color){ 8, 12, 16, 255 });
     stroke(ren, lr, (SDL_Color){ skin->theme_accent.r/3, skin->theme_accent.g/3, skin->theme_accent.b/3, 255 });
 
-    fb->rows_visible = lr.h / ROW_HEIGHT;
+    fb->rows_visible = lr.h / row_h;
     int max_scroll = fb->n_entries - fb->rows_visible;
     if (max_scroll < 0) max_scroll = 0;
     if (fb->scroll < 0) fb->scroll = 0;
@@ -656,7 +666,7 @@ void fb_render(FileBrowser* fb, SDL_Renderer* ren, const Skin* skin) {
         int idx = fb->scroll + r;
         if (idx >= fb->n_entries) break;
         FbEntry* en = &fb->entries[idx];
-        SDL_Rect row = { lr.x + 1, lr.y + 1 + r * ROW_HEIGHT, lr.w - 2, ROW_HEIGHT };
+        SDL_Rect row = { lr.x + 1, lr.y + 1 + r * row_h, lr.w - 2, row_h };
         if (en->selected) {
             SDL_Color bg = { (Uint8)(skin->theme_accent.r / 4 + skin->theme_panel.r / 2),
                              (Uint8)(skin->theme_accent.g / 4 + skin->theme_panel.g / 2),
@@ -686,7 +696,7 @@ void fb_render(FileBrowser* fb, SDL_Renderer* ren, const Skin* skin) {
             label[max_c - 1] = '.';
             label[max_c] = 0;
         }
-        font_draw(ren, row.x + 4, row.y + (ROW_HEIGHT - FONT_H) / 2, 1, color, label);
+        font_draw(ren, row.x + 4, row.y + (row_h - FONT_H) / 2, 1, color, label);
     }
 
     // scrollbar
@@ -701,7 +711,7 @@ void fb_render(FileBrowser* fb, SDL_Renderer* ren, const Skin* skin) {
     }
 
     // footer + cancel
-    SDL_Rect footer = { 0, skin->window_h - FOOTER_H, skin->window_w, FOOTER_H };
+    SDL_Rect footer = { 0, skin->window_h - footer_h, skin->window_w, footer_h };
     fill(ren, footer, skin->theme_panel);
 
     SDL_Rect orr = open_rect(skin);
@@ -724,6 +734,6 @@ void fb_render(FileBrowser* fb, SDL_Renderer* ren, const Skin* skin) {
     int tw = font_text_width(1, "CANCEL");
     font_draw(ren, cr.x + (cr.w - tw) / 2, cr.y + (cr.h - FONT_H) / 2, 1, skin->theme_text, "CANCEL");
 
-    font_draw(ren, 8, footer.y + (FOOTER_H - FONT_H) / 2, 1, skin->theme_text,
+    font_draw(ren, 8, footer.y + (footer_h - FONT_H) / 2, 1, skin->theme_text,
               "CTRL-CLICK MULTI  SHIFT-CLICK RANGE  CTRL-A ALL  CTRL-L PATH");
 }
