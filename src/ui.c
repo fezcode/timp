@@ -88,6 +88,20 @@ static int pl_row_h(const Skin* sk) {
     return sk->pl.row_h > 0 ? sk->pl.row_h : PL_ROW_H_DEFAULT;
 }
 
+// A slider whose rect is taller than wide is rendered & dragged vertically
+// (bottom = 0, top = 1 — physical-fader convention so volume rises upward
+// and a song's progress climbs the bar).
+static bool slider_is_vertical(SDL_Rect r) { return r.h > r.w; }
+
+static float slider_t_from_xy(SDL_Rect r, int mx, int my) {
+    float t;
+    if (slider_is_vertical(r)) t = 1.f - (float)(my - r.y) / (float)r.h;
+    else                        t = (float)(mx - r.x) / (float)r.w;
+    if (t < 0) t = 0;
+    if (t > 1) t = 1;
+    return t;
+}
+
 static const char* pl_basename(const char* path) {
     const char* s = strrchr(path, '/');
     const char* s2 = strrchr(path, '\\');
@@ -422,15 +436,14 @@ UiAction ui_handle_event(UI* ui, const SDL_Event* e, Audio* audio, Playlist* pl)
             ui->dragging_pos = true;
             double len = audio_length_seconds(audio);
             if (len > 0) {
-                double t = (double)(mx - sk->pos_slider.rect.x) / sk->pos_slider.rect.w;
+                double t = slider_t_from_xy(sk->pos_slider.rect, mx, my);
                 audio_seek_seconds(audio, t * len);
             }
             return act;
         }
         if (sk->vol_slider.defined && point_in(sk->vol_slider.rect, mx, my)) {
             ui->dragging_vol = true;
-            float v = (float)(mx - sk->vol_slider.rect.x) / (float)sk->vol_slider.rect.w;
-            audio_set_volume(audio, v);
+            audio_set_volume(audio, slider_t_from_xy(sk->vol_slider.rect, mx, my));
             return act;
         }
         // Click on viz cycles modes
@@ -448,22 +461,17 @@ UiAction ui_handle_event(UI* ui, const SDL_Event* e, Audio* audio, Playlist* pl)
         ui->dragging_pos = false;
         ui->dragging_vol = false;
     } else if (e->type == SDL_MOUSEMOTION) {
-        int mx = e->motion.x;
-        ui->hover_btn = skin_button_at(sk, e->motion.x, e->motion.y);
+        int mx = e->motion.x, my = e->motion.y;
+        ui->hover_btn = skin_button_at(sk, mx, my);
         if (ui->dragging_pos && sk->pos_slider.defined) {
             double len = audio_length_seconds(audio);
             if (len > 0) {
-                double t = (double)(mx - sk->pos_slider.rect.x) / sk->pos_slider.rect.w;
-                if (t < 0) t = 0;
-                if (t > 1) t = 1;
+                double t = slider_t_from_xy(sk->pos_slider.rect, mx, my);
                 audio_seek_seconds(audio, t * len);
             }
         }
         if (ui->dragging_vol && sk->vol_slider.defined) {
-            float v = (float)(mx - sk->vol_slider.rect.x) / (float)sk->vol_slider.rect.w;
-            if (v < 0) v = 0;
-            if (v > 1) v = 1;
-            audio_set_volume(audio, v);
+            audio_set_volume(audio, slider_t_from_xy(sk->vol_slider.rect, mx, my));
         }
     } else if (e->type == SDL_KEYDOWN) {
         switch (e->key.keysym.sym) {
@@ -832,12 +840,22 @@ static void render_slider(UI* ui, SkinElement* el, float t) {
 
     if (t < 0) t = 0;
     if (t > 1) t = 1;
-    SDL_Rect fill = { r.x + 1, r.y + 1, (int)((r.w - 2) * t), r.h - 2 };
-    fill_rect(ui->ren, fill, el->color);
 
-    int tx = r.x + (int)((r.w - 4) * t);
-    SDL_Rect thumb = { tx, r.y - 1, 4, r.h + 2 };
-    fill_rect(ui->ren, thumb, ui->skin->theme_text);
+    if (slider_is_vertical(r)) {
+        // Bottom-up fill so the bar grows upward as t increases.
+        int fill_h = (int)((r.h - 2) * t);
+        SDL_Rect fill = { r.x + 1, r.y + r.h - 1 - fill_h, r.w - 2, fill_h };
+        fill_rect(ui->ren, fill, el->color);
+        int ty = r.y + r.h - (int)((r.h - 4) * t) - 4;
+        SDL_Rect thumb = { r.x - 1, ty, r.w + 2, 4 };
+        fill_rect(ui->ren, thumb, ui->skin->theme_text);
+    } else {
+        SDL_Rect fill = { r.x + 1, r.y + 1, (int)((r.w - 2) * t), r.h - 2 };
+        fill_rect(ui->ren, fill, el->color);
+        int tx = r.x + (int)((r.w - 4) * t);
+        SDL_Rect thumb = { tx, r.y - 1, 4, r.h + 2 };
+        fill_rect(ui->ren, thumb, ui->skin->theme_text);
+    }
 }
 
 static void render_viz_wave(UI* ui, Audio* audio) {
