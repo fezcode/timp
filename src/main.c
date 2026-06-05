@@ -286,6 +286,11 @@ int main(int argc, char** argv) {
                         if (cfg.current_theme > 0 && cfg.current_theme < theme_count()) {
                             theme_apply(&skin, cfg.current_theme);
                         }
+                        // Recolor the window/taskbar icon to match the new skin.
+                        {
+                            SDL_Surface *ico = icon_make_surface(64, skin.theme_accent, skin.theme_panel);
+                            if (ico) { SDL_SetWindowIcon(win, ico); SDL_FreeSurface(ico); }
+                        }
                         // Resync host-tracked, skin-derived state.
                         MODAL_WIN_W    = skin.modal_w   > 0 ? skin.modal_w   : 520;
                         MODAL_WIN_H    = skin.modal_h   > 0 ? skin.modal_h   : 380;
