@@ -1,4 +1,5 @@
 build/
+dist/
 vendor/miniaudio.h
 vendor/stb_image.h
 *.o

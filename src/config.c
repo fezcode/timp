@@ -6,15 +6,17 @@
 
 #include <SDL2/SDL.h>
 
-// Portable layout: config.ini sits next to the executable so users can drop
-// the app onto a USB stick and carry their settings with it.
+// Settings always live in the platform user-data dir (e.g. %APPDATA%\Timp\ on
+// Windows, ~/.local/share/Timp/ on Linux), which SDL_GetPrefPath creates for
+// us. Independent of the install location, so a read-only install dir such as
+// Program Files works the same for admin and standard users.
 static void config_path(char* out, size_t cap) {
-    char* base = SDL_GetBasePath();
-    if (base) {
-        snprintf(out, cap, "%sconfig.ini", base);  // SDL_GetBasePath includes trailing sep
-        SDL_free(base);
+    char* pref = SDL_GetPrefPath("Timp", "Timp");
+    if (pref) {
+        snprintf(out, cap, "%sconfig.ini", pref);  // SDL_GetPrefPath includes trailing sep
+        SDL_free(pref);
     } else {
-        snprintf(out, cap, "config.ini");
+        snprintf(out, cap, "config.ini");  // last resort: current directory
     }
 }
 

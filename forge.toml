@@ -1,0 +1,92 @@
+[app]
+name    = "Timp"
+version = "0.5.0"
+id      = "io.timp.timp"
+
+[meta]
+publisher = "Şamil Bülbül"
+comments  = "Native Winamp-style music player"
+
+[ui]
+theme        = "console"
+window_title = "Timp Setup"
+
+[install]
+default_dir = "${PROGRAMFILES}/Timp"
+
+# Settings live in %APPDATA%\Timp (outside the install dir), so uninstall
+# never touches them — nothing to keep here.
+[uninstall]
+keep = []
+
+[[steps]]
+type  = "welcome"
+title = "Timp 0.5.0"
+body  = "This wizard will install Timp 0.5.0 on your computer.\n\nTimp is a small, native, Winamp-style music player.\n\nClick Next to continue."
+
+[[steps]]
+type  = "license"
+title = "License"
+body  = "Timp is released into the public domain. Please review the terms below."
+file  = "LICENSE.txt"
+
+[[steps]]
+type  = "folder"
+title = "Select Folder"
+body  = "Choose where to install Timp 0.5.0."
+
+[[steps]]
+type  = "shortcuts"
+title = "Select Optional Tasks"
+body  = "Check the items you would like the installer to perform."
+
+[[steps]]
+type  = "install"
+title = "Installing..."
+body  = "Copying files to your system."
+
+[[steps]]
+type  = "finish"
+title = "Installation Complete"
+body  = "Timp has been installed successfully.\n\nClick Finish to close the installer."
+
+[[steps.launches]]
+kind    = "app"
+target  = "${INSTALLDIR}/timp.exe"
+label   = "Run Timp after install"
+checked = true
+
+# Application payload — staged clean by installer.ps1 (timp.exe + SDL2.dll + skins/)
+[[dirs]]
+src = "dist/win-x64"
+dst = "${INSTALLDIR}"
+
+[[shortcuts]]
+target   = "${INSTALLDIR}/timp.exe"
+location = "${DESKTOP}/Timp.lnk"
+name     = "Timp"
+icon     = "${INSTALLDIR}/timp.exe"
+label    = "Create Desktop Shortcut"
+optional = true
+default  = true
+
+[[shortcuts]]
+target   = "${INSTALLDIR}/timp.exe"
+location = "${STARTMENU}/Timp/Timp.lnk"
+name     = "Timp"
+icon     = "${INSTALLDIR}/timp.exe"
+label    = "Create Start Menu Entry"
+optional = true
+default  = true
+
+[[registry]]
+hive  = "HKLM"
+key   = "Software\\Timp\\Timp"
+value = "InstallDir"
+data  = "${INSTALLDIR}"
+
+[[registry]]
+hive  = "HKLM"
+key   = "Software\\Timp\\Timp"
+value = "Version"
+data  = "0.5.0"

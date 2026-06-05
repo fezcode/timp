@@ -39,8 +39,9 @@ is the whole app.
   [`skins/default/skin.ini`](skins/default/skin.ini) for the format
 - **Media keys** — Play/Pause, Stop, Prev, Next work system-wide on Windows
   (Win32 `RegisterHotKey`) and via SDL keysyms elsewhere
-- **Portable** — `config.ini` is written next to the executable, so you can
-  drop the build folder onto a USB stick and it stays self-contained
+- **Per-user settings** — `config.ini` is stored in your platform user-data
+  directory (`%APPDATA%\Timp` on Windows), so settings persist across reinstalls
+  and need no write access to the install folder
 - **Tiny** — pure C11, ~5k lines, no GUI toolkit, no scripting runtime
 
 ## Screenshots
@@ -89,6 +90,21 @@ make
 ./build/timp
 ```
 
+## Install (Windows)
+
+Timp ships a Windows installer built with [Forge](../Forge). To produce
+`Timp-Setup-<version>.exe`:
+
+```powershell
+.\installer.ps1
+```
+
+This builds Timp, stages a clean payload (`timp.exe` + `SDL2.dll` + `skins/`),
+and runs Forge to emit the Setup under `dist\installer\`. The installer is
+machine-wide (installs to `C:\Program Files\Timp` and prompts for elevation),
+adds Desktop and Start Menu shortcuts, and can launch Timp when it finishes.
+Pass `-SkipBuild` to package an existing `build\` without recompiling.
+
 ## Usage
 
 - **Drop files** onto the window to enqueue them.
@@ -131,7 +147,10 @@ sections include `[meta]`, `[window]`, `[theme]`, `[drag]`,
 
 ## Configuration
 
-`config.ini` lives next to the executable (via `SDL_GetBasePath()`).
+`config.ini` lives in your platform user-data directory (via
+`SDL_GetPrefPath()`): `%APPDATA%\Timp\config.ini` on Windows,
+`~/.local/share/Timp/config.ini` on Linux, and
+`~/Library/Application Support/Timp/config.ini` on macOS.
 Persisted keys:
 
 ```ini
