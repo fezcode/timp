@@ -44,8 +44,22 @@ foreach ($s in $srcs) {
     if ($LASTEXITCODE -ne 0) { throw "compile failed: $s" }
 }
 
+# Compile the Windows resource (embeds the .exe icon). Optional: if windres is
+# missing the build still produces a working binary with the runtime icon.
+$rcObj = $null
+$windres = (Get-Command windres -ErrorAction SilentlyContinue).Source
+if ($windres) {
+    Write-Output 'compiling resource app.rc'
+    & $windres 'src\app.rc' -o 'build\app_rc.o'
+    if ($LASTEXITCODE -ne 0) { throw 'windres failed' }
+    $rcObj = 'build\app_rc.o'
+} else {
+    Write-Output 'windres not found - skipping embedded exe icon'
+}
+
 Write-Output 'linking timp.exe'
 $objs = $srcs | ForEach-Object { "build\$_.o" }
+if ($rcObj) { $objs = $objs + $rcObj }
 & $gcc @objs -o build\timp.exe @sdlLibs @winLibs
 if ($LASTEXITCODE -ne 0) { throw 'link failed' }
 

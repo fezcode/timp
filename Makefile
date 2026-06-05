@@ -32,17 +32,23 @@ SRCS  := src/main.c src/audio.c src/skin.c src/ui.c src/ini.c src/font.c \
 OBJS  := $(patsubst src/%.c,$(BUILD)/%.o,$(SRCS))
 
 ifeq ($(OS),Windows_NT)
-    BIN := $(BUILD)/timp.exe
+    BIN     := $(BUILD)/timp.exe
+    WINDRES ?= windres
+    RES     := $(BUILD)/app_rc.o
 else
     BIN := $(BUILD)/timp
+    RES :=
 endif
 
 .PHONY: all clean run
 
 all: $(BIN)
 
-$(BIN): $(OBJS)
-	$(CC) $(OBJS) -o $@ $(LDFLAGS) $(LDLIBS)
+$(BIN): $(OBJS) $(RES)
+	$(CC) $(OBJS) $(RES) -o $@ $(LDFLAGS) $(LDLIBS)
+
+$(BUILD)/app_rc.o: src/app.rc | $(BUILD)
+	$(WINDRES) src/app.rc -o $@
 
 $(BUILD)/%.o: src/%.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
