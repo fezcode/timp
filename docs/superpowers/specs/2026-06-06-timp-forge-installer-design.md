@@ -18,7 +18,7 @@ Give Timp a Windows installer built with **Forge** (the Go installer toolkit at
 | Install scope | Machine-wide — `${PROGRAMFILES}/Timp`; Forge auto-elevates via UAC |
 | License step | Include it; create a public-domain `LICENSE.txt` |
 | Version | `0.5.0` |
-| `config.ini` under Program Files | Add a writable-dir fallback in `config.c` (see below) |
+| Settings location | **Always** `%APPDATA%\Timp\config.ini` (via `SDL_GetPrefPath`), regardless of install dir — drops the next-to-exe behavior entirely |
 
 ## Why a clean staging step
 
@@ -54,8 +54,10 @@ window_title = "Timp Setup"
 [install]
 default_dir = "${PROGRAMFILES}/Timp"
 
+# Settings live in %APPDATA%\Timp (outside the install dir), so uninstall
+# never touches them — nothing to keep here.
 [uninstall]
-keep = ["config.ini"]
+keep = []
 
 [[steps]]
 type  = "welcome"
@@ -159,46 +161,29 @@ Adapted from Hisashi's. Params: `-Rid win-x64`, `-Config Release`,
 Public-domain dedication (Unlicense text), matching the README's "All code
 written for this project is released into the public domain."
 
-### 4. `Timp/src/config.c` (modify) — writable-dir fallback
+### 4. `Timp/src/config.c` (modify) — always use the user-data dir
 
-Under a Program Files install, `config_save()`'s `fopen(path,"w")` next to the
-exe fails for standard users and settings silently don't persist. Fix:
-resolve the config path to a writable location, preferring portable
-(next-to-exe) when that directory is writable, else the platform user-data dir
-via `SDL_GetPrefPath` (`%APPDATA%\Timp\` on Windows;
-`~/.local/share` / `~/Library/Application Support` elsewhere — keeps Timp
-cross-platform).
+Settings always live in the platform user-data dir, which `SDL_GetPrefPath`
+returns and creates: `%APPDATA%\Timp\config.ini` on Windows,
+`~/.local/share/Timp/config.ini` on Linux, `~/Library/Application Support/Timp/`
+on macOS. This keeps the install dir (which may be read-only, e.g. Program
+Files) free of writable state, and works identically for admin and standard
+users. The previous next-to-exe (`SDL_GetBasePath`) behavior is dropped.
 
 Only `config_path()` changes; `config_load`/`config_save` are untouched since
 both already route through it.
 
 ```c
+// Settings always live in the platform user-data dir (e.g. %APPDATA%\Timp\
+// on Windows), which SDL_GetPrefPath creates for us. Independent of where the
+// app is installed, so a read-only install dir (Program Files) is fine.
 static void config_path(char* out, size_t cap) {
-    char* base = SDL_GetBasePath();
-    if (base) {
-        // Prefer a portable config next to the exe when that dir is writable
-        // (preserves the USB-stick use case). Probe with a temp file so we
-        // never truncate an existing config.ini.
-        char probe[1024];
-        snprintf(probe, sizeof probe, "%s.timp_write_test", base);
-        FILE* t = fopen(probe, "w");
-        if (t) {
-            fclose(t);
-            remove(probe);
-            snprintf(out, cap, "%sconfig.ini", base);
-            SDL_free(base);
-            return;
-        }
-        SDL_free(base);
-    }
-    // Read-only install dir (e.g. Program Files): fall back to the
-    // platform user-data dir, which SDL_GetPrefPath creates for us.
     char* pref = SDL_GetPrefPath("Timp", "Timp");
     if (pref) {
         snprintf(out, cap, "%sconfig.ini", pref);
         SDL_free(pref);
     } else {
-        snprintf(out, cap, "config.ini");
+        snprintf(out, cap, "config.ini");  // last-resort: cwd
     }
 }
 ```
@@ -207,6 +192,14 @@ static void config_path(char* out, size_t cap) {
 
 Add `dist/` (installer staging + output). `build/`, `*.exe`, `*.o` already
 ignored.
+
+### 6. `Timp/README.md` (modify)
+
+The "Portable" feature bullet and the "Configuration" section currently say
+`config.ini` lives next to the executable via `SDL_GetBasePath()`. Update both
+to reflect the new location (`%APPDATA%\Timp\config.ini`, or the platform
+equivalent via `SDL_GetPrefPath`). Add a short "Install" note pointing at
+`installer.ps1` / the Forge-built `Setup.exe`.
 
 ## Data flow
 
@@ -227,8 +220,9 @@ build.ps1 ──> build/ (dirty: .o, timp.exe, SDL2.dll, skins/, config.ini)
   subsystem **GUI**.
 - Manual: run Setup, confirm UAC elevation prompt, install to
   `C:\Program Files\Timp`, Desktop/Start-Menu shortcuts, "Run Timp" launch.
-- Manual: as a standard (non-admin) user, change a setting and relaunch —
-  confirm it persists (via `%APPDATA%\Timp\config.ini`).
+- Manual: change a setting and relaunch — confirm it persists via
+  `%APPDATA%\Timp\config.ini` (works for admin and standard users alike, since
+  it never touches the install dir).
 - `config.c` change compiles cleanly under `build.ps1`.
 
 ## Known limitations / non-goals
@@ -240,4 +234,7 @@ build.ps1 ──> build/ (dirty: .o, timp.exe, SDL2.dll, skins/, config.ini)
   resource (`.rc` + `.ico`) to Timp's gcc build.
 - **No version flag added to the C app.** `0.5.0` lives only in `forge.toml`;
   wiring a `--version` into `timp.exe` is out of scope.
+- **Settings are no longer portable next-to-exe.** They always live in the
+  user-data dir, so copying the build folder to a USB stick no longer carries
+  settings with it (per request: settings always in `%APPDATA%`).
 - Linux/macOS packaging is unchanged (Forge is Windows-only).
