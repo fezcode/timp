@@ -81,3 +81,33 @@ void icon_render_rgba(uint8_t *rgba, int size,
         }
     }
 }
+
+#ifdef ICON_WITH_SDL
+#include <stdlib.h>
+#include <string.h>
+
+SDL_Surface *icon_make_surface(int size, SDL_Color accent, SDL_Color tile) {
+    SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, size, size, 32,
+                                                    SDL_PIXELFORMAT_RGBA32);
+    if (!s) return NULL;
+    SDL_LockSurface(s);
+    if (s->pitch == size * 4) {
+        icon_render_rgba((uint8_t *)s->pixels, size,
+                         accent.r, accent.g, accent.b,
+                         tile.r, tile.g, tile.b, 1);
+    } else {
+        // Padded pitch: render to a packed buffer, copy row by row.
+        uint8_t *buf = (uint8_t *)malloc((size_t)size * size * 4);
+        if (buf) {
+            icon_render_rgba(buf, size, accent.r, accent.g, accent.b,
+                             tile.r, tile.g, tile.b, 1);
+            for (int y = 0; y < size; y++)
+                memcpy((uint8_t *)s->pixels + (size_t)y * s->pitch,
+                       buf + (size_t)y * size * 4, (size_t)size * 4);
+            free(buf);
+        }
+    }
+    SDL_UnlockSurface(s);
+    return s;
+}
+#endif

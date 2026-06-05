@@ -20,6 +20,7 @@
 #include "playlist.h"
 #include "config.h"
 #include "theme.h"
+#include "icon.h"
 
 static const char* basename_only(const char* path) {
     const char* s = strrchr(path, '/');
@@ -146,6 +147,13 @@ int main(int argc, char** argv) {
         theme_apply(&skin, cfg.current_theme);
     }
     SDL_SetWindowSize(win, skin.window_w, skin.window_h);
+
+    // Custom app icon, themed to the active skin. SDL copies the surface, so
+    // we can free it immediately.
+    {
+        SDL_Surface *ico = icon_make_surface(64, skin.theme_accent, skin.theme_panel);
+        if (ico) { SDL_SetWindowIcon(win, ico); SDL_FreeSurface(ico); }
+    }
 
     UI ui;
     ui_init(&ui, ren, &skin);

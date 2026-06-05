@@ -18,12 +18,12 @@ $sdlCflags = (& cmd /c "pkg-config --cflags sdl2") -split '\s+' | Where-Object {
 $sdlLibs   = (& cmd /c "pkg-config --libs sdl2")   -split '\s+' | Where-Object { $_ }
 if (-not $sdlLibs) { throw "pkg-config returned no SDL2 libs (install: 'pacman -S mingw-w64-x86_64-SDL2')" }
 
-$flags = @('-O2','-Wall','-Wextra','-Wno-unused-parameter','-std=c11','-Ivendor','-Isrc') + $sdlCflags
+$flags = @('-O2','-Wall','-Wextra','-Wno-unused-parameter','-std=c11','-DICON_WITH_SDL','-Ivendor','-Isrc') + $sdlCflags
 $winLibs = '-lole32','-lwinmm','-lm'
 
 New-Item -ItemType Directory -Force -Path build | Out-Null
 
-$srcs = 'main','audio','skin','ui','ini','font','playlist','filebrowser','fft','eq','theme','settings','config','vendor'
+$srcs = 'main','audio','skin','ui','ini','font','playlist','filebrowser','fft','eq','theme','settings','config','icon','vendor'
 
 # Newest-header timestamp — any .h change invalidates every .o.
 # Without this, edits to (e.g.) skin.h leave stale .o files compiled against

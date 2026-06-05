@@ -13,7 +13,7 @@ ifeq ($(SDL_LIBS),)
     SDL_LIBS   := $(shell sdl2-config --libs 2>/dev/null)
 endif
 
-CFLAGS  += $(SDL_CFLAGS) -Ivendor -Isrc
+CFLAGS  += $(SDL_CFLAGS) -Ivendor -Isrc -DICON_WITH_SDL
 LDLIBS  += $(SDL_LIBS) -lm
 
 # Platform-specific audio backend libs
@@ -28,7 +28,7 @@ endif
 BUILD := build
 SRCS  := src/main.c src/audio.c src/skin.c src/ui.c src/ini.c src/font.c \
          src/playlist.c src/filebrowser.c src/fft.c src/eq.c \
-         src/theme.c src/settings.c src/config.c src/vendor.c
+         src/theme.c src/settings.c src/config.c src/icon.c src/vendor.c
 OBJS  := $(patsubst src/%.c,$(BUILD)/%.o,$(SRCS))
 
 ifeq ($(OS),Windows_NT)
