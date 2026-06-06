@@ -1,3 +1,8 @@
+# installer.ps1 - build a Windows Setup.exe with Forge.
+# Runs build.ps1, stages a clean single-exe payload into dist\win-x64, then runs
+# Forge (expected at ..\Forge) against forge.toml to emit
+# dist\installer\Timp-Setup-<version>.exe and verifies it is a GUI binary.
+# Pass -SkipBuild to package an existing build\ without recompiling.
 param(
   [string]$ForgeDir = "..\Forge",
   [switch]$SkipBuild

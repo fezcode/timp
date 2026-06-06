@@ -1,62 +1,58 @@
 # Timp
 
-A small, native, Winamp-style music player written in C.
+A small, native, album-art-forward music player written in C with
+[raylib](https://www.raylib.com/).
 
-Single-window, fixed pixel layout, beveled buttons, scrolling title text,
-spectrum visualizer, 10-band EQ, and a built-in skin format. Cross-platform
-on Windows, Linux, and macOS via SDL2 + miniaudio. No installer, no
-runtime, no telemetry — the binary plus an `SDL2.dll` and a `skins/` folder
-is the whole app.
-
-<p align="center">
-  <img src="examples/1.png" alt="Timp player window" width="380"/>
-  <br/>
-  <em>Main window — Crimson theme, playlist visible</em>
-</p>
+Borderless single window with a Hi-Fi look: large cover art, anti-aliased
+typography, an accent color sampled from the artwork, a live spectrum, a
+10-band EQ, a drag-reorderable queue, and synced lyrics. Audio is decoded by
+[miniaudio](https://miniaud.io/) (MP3 / FLAC / OGG / WAV, Unicode paths).
+No installer, no runtime, no telemetry — raylib is linked statically, so the
+whole app is a single `timp.exe`.
 
 <p align="center">
-  <img src="examples/6.png" alt="Compact view" width="380"/>
-  <br/>
-  <em>Compact view with the playlist hidden</em>
+  <img src="examples/main.png" alt="Timp — now playing" width="360"/>
 </p>
 
 ## Features
 
-- **Formats** — MP3, FLAC, WAV, OGG/Vorbis (whatever miniaudio + dr_flac decode)
-- **Unicode paths** — file enumeration and audio decoding both go through the
-  Win32 wide API, so non-ASCII folders and filenames work end to end
-- **Playlist** — drag songs in to enqueue, drag rows to reorder, click the `×`
-  to remove a row
-- **File dialog** — built-in browser with arrow-key navigation
-  (Up/Down/PageUp/PageDown/Home/End), drive picker (`..` from drive root lists
-  logical drives on Windows), and a path strip you can click or `Ctrl+L` to
-  type a path directly
+- **Formats** — MP3, FLAC, OGG/Vorbis, WAV (whatever miniaudio decodes)
+- **Unicode paths** — file open and decoding go through the Win32 wide API, so
+  non-ASCII folders and filenames work end to end
+- **Album art** — embedded covers (ID3v2 `APIC`, FLAC `PICTURE`) → a sibling
+  `cover.jpg` / `folder.jpg` → a generated gradient; the **accent color is
+  sampled from the artwork**
+- **Lyrics** — synced `.lrc` (karaoke-style highlight), plain `.txt`, embedded
+  ID3 `USLT` / Vorbis `LYRICS`, and an online **lrclib.net** fallback fetched on
+  a background thread
+- **Visualizers** — click the album art to cycle cover → spectrum bars →
+  waveform; a mini spectrum sits under the title
+- **Queue** — drag files or a folder in (appends); drag rows to reorder,
+  double-click to play, hover for a remove `×`, or **Clear** the whole queue
 - **10-band equalizer** — 60 / 170 / 310 / 600 Hz / 1 / 3 / 6 / 12 / 14 / 16 kHz,
-  with `ON` / `FLAT` toggles and a spectrum view backed by an FFT
-- **Themes** — eight presets (Classic Green, Winamp Amber, Ice, Crimson,
-  Monochrome, Sunset, Mint, High Contrast), persisted across runs
-- **Skins** — INI-described layout with optional PNG background; see
-  [`skins/default/skin.ini`](skins/default/skin.ini) for the format
-- **App icon** — a custom "T-play" mark, drawn procedurally in C; the window /
-  taskbar icon follows the active skin's colors, and `timp.exe` embeds a
-  multi-resolution `.ico` (Windows) for Explorer and pinned entries
-- **Media keys** — Play/Pause, Stop, Prev, Next work system-wide on Windows
-  (Win32 `RegisterHotKey`) and via SDL keysyms elsewhere
-- **Per-user settings** — `config.ini` is stored in your platform user-data
-  directory (`%APPDATA%\Timp` on Windows), so settings persist across reinstalls
-  and need no write access to the install folder
-- **Tiny** — pure C11, ~5k lines, no GUI toolkit, no scripting runtime
+  with `ON` / `FLAT`
+- **Transport** — play/pause, prev/next, **drag-to-scrub** seeking, volume,
+  shuffle, and 3-state repeat (off / one / all)
+- **Tags** — title / artist / album read from ID3v2 and Vorbis comments
+  (UTF-8 / UTF-16, full Latin + Turkish glyph coverage)
+- **System integration** — system-wide media keys, always-on-top, and a
+  procedurally-drawn app/taskbar icon
+- **Persistent settings** — volume, EQ, always-on-top, and window position are
+  saved to `%APPDATA%\Timp\config.ini`
+- **Polished window** — borderless with anti-aliased, rounded corners (Win11
+  DWM) and no console window
+- **Tiny** — pure C11 + raylib + miniaudio, statically linked into one exe
 
 ## Screenshots
 
 <table>
   <tr>
-    <td align="center"><img src="examples/2.png" alt="Equalizer" width="320"/><br/><em>10-band EQ + spectrum</em></td>
-    <td align="center"><img src="examples/3.png" alt="Themes" width="320"/><br/><em>Settings → Themes</em></td>
+    <td align="center"><img src="examples/queue.png" alt="Queue" width="300"/><br/><em>Queue — reorder / remove / clear</em></td>
+    <td align="center"><img src="examples/eq.png" alt="Equalizer" width="300"/><br/><em>10-band EQ</em></td>
   </tr>
   <tr>
-    <td align="center"><img src="examples/5.png" alt="Options" width="320"/><br/><em>Settings → Options</em></td>
-    <td align="center"><img src="examples/4.png" alt="About" width="320"/><br/><em>Settings → About</em></td>
+    <td align="center"><img src="examples/lyrics.png" alt="Lyrics" width="300"/><br/><em>Synced lyrics</em></td>
+    <td align="center"><img src="examples/settings.png" alt="Settings" width="300"/><br/><em>Settings</em></td>
   </tr>
 </table>
 
@@ -64,135 +60,106 @@ is the whole app.
 
 ### Dependencies
 
-- A C11 compiler (gcc, clang, MSVC via MinGW)
-- SDL2 development headers
-- `miniaudio.h` and `stb_image.h` — fetched automatically by the setup script
+- A C11 compiler (MSYS2 MinGW-w64 `gcc`) and `pkg-config`
+- **raylib** (`mingw-w64-x86_64-raylib`)
+- `miniaudio.h` and `stb_image.h` — fetched automatically by `setup.ps1`
 
 ### Windows (MSYS2 / MinGW64)
 
 ```powershell
-pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-pkgconf mingw-w64-x86_64-SDL2
+pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-pkgconf mingw-w64-x86_64-raylib
 .\build.ps1
 .\build\timp.exe
 ```
 
-`build.ps1` runs `setup.ps1` on first build to fetch the vendored headers,
-compiles incrementally, and copies `SDL2.dll` and `skins/` next to the
-binary.
+`build.ps1` fetches the vendored headers on first run, compiles incrementally,
+embeds the `.exe` icon, and links a standalone `timp.exe` (no DLLs to ship).
 
-### Linux / macOS
+> Fonts are currently loaded from `C:\Windows\Fonts` (Segoe UI), so the build
+> targets Windows. Bundling an open font would make it cross-platform.
 
-```sh
-# Debian/Ubuntu
-sudo apt install build-essential pkg-config libsdl2-dev
-# macOS (Homebrew)
-brew install sdl2 pkg-config
+The build tooling is three small scripts:
 
-./setup.sh
-make
-./build/timp
-```
-
-## Install (Windows)
-
-Timp ships a Windows installer built with [Forge](../Forge). To produce
-`Timp-Setup-<version>.exe`:
-
-```powershell
-.\installer.ps1
-```
-
-This builds Timp, stages a clean payload (`timp.exe` + `SDL2.dll` + `skins/`),
-and runs Forge to emit the Setup under `dist\installer\`. The installer is
-machine-wide (installs to `C:\Program Files\Timp` and prompts for elevation),
-adds Desktop and Start Menu shortcuts, and can launch Timp when it finishes.
-Pass `-SkipBuild` to package an existing `build\` without recompiling.
+| Script | Does |
+| --- | --- |
+| `setup.ps1` | Fetches the vendored headers (`miniaudio.h`, `stb_image.h`) into `vendor/`. Run automatically by `build.ps1`. |
+| `build.ps1` | Compiles `src/*.c` and links the standalone `build\timp.exe`. |
+| `installer.ps1` | Packages `timp.exe` into a Windows `Setup.exe` via [Forge](../Forge) + `forge.toml` (installs to Program Files with shortcuts). Optional — needs the Forge toolchain. |
 
 ## Usage
 
-- **Drop files** onto the window to enqueue them.
-- **Click the folder button** to open the file dialog.
-- **Double-click** a row in the playlist to play it; **drag** a row to
-  reorder; **click `×`** on the right of a row to remove it.
-- **Toggle EQ** with the `EQ` button — opens the 10-band panel with `ON`,
-  `FLAT`, and `BACK` controls.
-- **Settings** (gear icon, top-right) opens a tabbed modal:
-  - **Themes** — pick one of the eight color presets.
-  - **Options** — Always on top / Show playlist.
-  - **About** — version and credits.
+- **Drop files or a folder** onto the window to enqueue them, or click **`+`**
+  (top-left) for the native open dialog.
+- **Click the album art** to cycle through the cover and the visualizers.
+- Top bar: **`+`** open · **`≡`** queue · **sliders** EQ · **gear** settings ·
+  **`♪`** lyrics.
+- **Queue** — double-click a row to play, drag rows to reorder, hover for the
+  `×`, or **Clear** to empty it.
+- **Seek** by dragging the progress bar; **volume** via its slider, the mouse
+  wheel, or `↑` / `↓`.
 
 ### Keyboard
 
 | Key | Action |
 | --- | --- |
 | Space | Play / pause |
-| ← / → | Seek -5s / +5s |
+| ← / → | Seek −5s / +5s |
 | ↑ / ↓ | Volume up / down |
-| `M` | Mute |
-| `Z` / `X` / `C` / `V` / `B` | Prev / Play / Pause / Stop / Next |
-| `L` | Toggle loop |
-| `S` | Toggle shuffle |
-| Media keys | Play/Pause, Stop, Prev, Next (system-wide on Windows) |
+| `O` | Open file dialog |
+| `Q` / `E` / `G` / `Y` | Queue / EQ / Settings / Lyrics panel |
+| `S` / `L` | Shuffle / cycle repeat |
+| `T` | Always on top |
+| Media keys | Play/Pause, Stop, Prev, Next (system-wide) |
 
-In the file dialog: `↑/↓/PgUp/PgDn/Home/End` to navigate, `Enter` to open,
-`Backspace` to go up, `Ctrl+L` to type a path, `Esc` to cancel.
+## Lyrics
 
-## Skins
+For the playing track, Timp looks for lyrics in this order:
 
-A skin is a folder under `skins/` containing `skin.ini` and optionally a
-PNG background. The INI file describes pixel-perfect button hit-rects,
-display areas, and theme colors. See
-[`skins/default/skin.ini`](skins/default/skin.ini) for the full format —
-sections include `[meta]`, `[window]`, `[theme]`, `[drag]`,
-`[button.{prev,play,stop,next,open,...}]`, `[display.title]`,
-`[display.time]`, `[viz]`, `[slider.position]`, `[slider.volume]`, and
-`[playlist]`.
+1. a sibling **`.lrc`** file (synced — shows a karaoke-style highlight),
+2. a sibling **`.txt`** file (plain, scrollable),
+3. **embedded** lyrics (ID3v2 `USLT` / Vorbis `LYRICS`),
+4. **lrclib.net** — an online lookup by artist / title / duration, fetched in
+   the background (shows "Searching lyrics…" while it runs).
 
 ## Configuration
 
-`config.ini` lives in your platform user-data directory (via
-`SDL_GetPrefPath()`): `%APPDATA%\Timp\config.ini` on Windows,
-`~/.local/share/Timp/config.ini` on Linux, and
-`~/Library/Application Support/Timp/config.ini` on macOS.
-Persisted keys:
+`config.ini` lives in `%APPDATA%\Timp\`. Persisted keys:
 
 ```ini
+volume = 0.700
 always_on_top = 0
-playlist_visible = 1
-current_theme = 0
+eq_enabled = 0
+eq0 = 0.00      # … eq9 — per-band gains
+win_x = ...
+win_y = ...
 ```
-
-The file is written on a clean exit.
 
 ## Project layout
 
 ```
 src/
-  main.c          window, event loop, hit-test, hotkeys
-  audio.c         miniaudio wrapper (Unicode paths on Windows)
-  playlist.c     ordered list + index management
-  ui.c            button rendering, transport state, drag-reorder
-  skin.c          INI loader, button geometry
-  filebrowser.c   modal file dialog with drive picker + path edit
-  config.c        portable settings persistence
-  eq.c / fft.c    10-band EQ + spectrum visualizer
-  theme.c         color presets
-  settings.c      themes/options/about modal
-  font.c          embedded 5x7 bitmap font
-  icon.c          procedural app-icon renderer (window icon + .ico source)
-  ini.c           tiny INI parser
-vendor/           miniaudio.h, stb_image.h (fetched)
-skins/default/    reference skin
-assets/timp.ico   embedded Windows executable icon (generated by tools/makeicon.c)
-tools/makeicon.c  standalone generator for assets/timp.ico
-examples/         screenshots used in this README
+  rl_main.c      window, event loop, UI, all panels (raylib)
+  audio.c        miniaudio engine — thread-safe decode, Unicode paths
+  art.c          embedded + folder cover-art extraction & decode
+  tags.c         ID3v2 / Vorbis metadata + embedded lyrics
+  lyrics.c       .lrc / .txt parsing + lrclib.net online fetch (WinHTTP)
+  osdialog.c     native open dialog + DWM rounded corners
+  rlconfig.c     persistent %APPDATA% settings
+  mediakeys.c    system-wide media-key hotkeys
+  eq.c / fft.c   10-band EQ + spectrum FFT
+  playlist.c     queue / index management
+  vendor_ma.c    miniaudio implementation unit
+vendor/          miniaudio.h, stb_image.h (fetched)
+assets/timp.ico  embedded Windows executable icon
+examples/        screenshots used in this README
 ```
 
 ## Credits
 
 - **Author** — Şamil Bülbül
-- **SDL2** — window, input, render (zlib license)
+- **raylib** — window, input, rendering (zlib license)
 - **miniaudio** — audio decode + output (public domain / MIT-0)
-- **stb_image** — PNG/JPG/BMP loader (public domain / MIT)
+- **stb_image** — cover-art decoding (public domain / MIT)
+- **lrclib.net** — community lyrics database
 
 All code written for this project is released into the public domain.

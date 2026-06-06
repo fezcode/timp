@@ -1,3 +1,7 @@
+# setup.ps1 - fetch the vendored single-header dependencies into vendor/.
+# Downloads miniaudio.h (audio decode/playback) and stb_image.h (cover-art
+# decoding) when missing. build.ps1 calls this automatically on the first
+# build, so you rarely need to run it by hand.
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $vendor = Join-Path $root 'vendor'
