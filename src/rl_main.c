@@ -10,6 +10,7 @@
 #include "playlist.h"
 #include "osdialog.h"
 #include "tags.h"
+#include "lyrics.h"
 #include "rlconfig.h"
 #include "mediakeys.h"
 
@@ -46,6 +47,10 @@ static bool      g_show_queue = false;
 static bool      g_show_eq = false;
 static int       g_eq_drag = -1;
 static bool      g_show_settings = false;
+static bool      g_show_lyrics = false;
+static bool      g_lyrics_fetching = false;
+static int       g_lyrics_scroll = 0;
+static Lyrics    g_lyrics;
 static float     g_premute = 0.7f;
 static int       g_repeat = 0;          // 0 off · 1 one · 2 all
 static int       g_queue_scroll = 0;
@@ -55,7 +60,7 @@ static const int NBARS = 48;
 static Font fTitle, fMeta, fSmall, fEye;
 
 // hover animation values
-enum { HV_OPEN, HV_QUEUE, HV_EQ, HV_SET, HV_MIN, HV_CLOSE, HV_PLAY, HV_PREV, HV_NEXT, HV_SHUF, HV_REP, HV_ART, HV_N };
+enum { HV_OPEN, HV_QUEUE, HV_EQ, HV_SET, HV_LYR, HV_MIN, HV_CLOSE, HV_PLAY, HV_PREV, HV_NEXT, HV_SHUF, HV_REP, HV_ART, HV_N };
 static float g_hv[HV_N];
 
 // queue interaction
@@ -165,10 +170,25 @@ static void set_meta_from_path(const char *path) {
         g_meta[0] = 0;
     }
 }
+static void reset_now_playing(void) {
+    if (g_audio) audio_unload(g_audio);
+    snprintf(g_title, sizeof(g_title), "Drop a track to begin");
+    g_meta[0] = 0; g_fmt[0] = 0;
+    g_lyrics.count = 0; g_lyrics.synced = false;
+    g_accent = (Color){ 201, 164, 90, 255 };
+    if (g_has_cover) { UnloadTexture(g_cover); g_has_cover = false; }
+}
+
 static void load_file(const char *path) {
     if (!path || !g_audio) return;
-    if (audio_load(g_audio, path)) { audio_play(g_audio); set_meta_from_path(path); set_cover(path); }
-    else snprintf(g_title, sizeof(g_title), "Can't open file");
+    if (audio_load(g_audio, path)) {
+        audio_play(g_audio); set_meta_from_path(path); set_cover(path);
+        lyrics_load(path, &g_lyrics); g_lyrics_scroll = 0; g_lyrics_fetching = false;
+        if (g_lyrics.count == 0) {  // no local lyrics → try lrclib.net in the background
+            lyrics_fetch_start(g_meta, g_title, "", (int)audio_length_seconds(g_audio));
+            g_lyrics_fetching = true;
+        }
+    } else snprintf(g_title, sizeof(g_title), "Can't open file");
 }
 static void queue_add_cb(const char *path, void *ud) { (void)ud; playlist_add(&g_pl, path); }
 static void open_dialog(void) {
@@ -280,6 +300,7 @@ int main(int argc, char **argv) {
     if (getenv("TIMP_QUEUE")) g_show_queue = true;
     if (getenv("TIMP_EQ")) g_show_eq = true;
     if (getenv("TIMP_SET")) g_show_settings = true;
+    if (getenv("TIMP_LYR")) g_show_lyrics = true;
 
     bool dragging = false; Vector2 dragGrab = { 0 };
     bool vol_drag = false;
@@ -304,6 +325,7 @@ int main(int argc, char **argv) {
             case MK_NEXT:      if (playlist_has_next(&g_pl)) load_file(playlist_next(&g_pl)); break;
             default: break;
         }
+        if (lyrics_fetch_poll(&g_lyrics)) g_lyrics_fetching = false;
         // drag-drop APPENDS to the queue (keeps what's already there)
         if (IsFileDropped()) {
             FilePathList d = LoadDroppedFiles();
@@ -341,12 +363,14 @@ int main(int argc, char **argv) {
         Rectangle queueR = { PAD + 30, 12, 24, 22 };
         Rectangle eqR    = { PAD + 60, 12, 26, 22 };
         Rectangle setR   = { PAD + 92, 12, 24, 22 };
+        Rectangle lyrR   = { PAD + 122, 12, 24, 22 };
         Rectangle minR   = { WW - 58, 12, 22, 22 };
         Rectangle closeR = { WW - 32, 12, 22, 22 };
         Rectangle volRect = { (float)(PAD + 24), (float)volY, (float)(WW - 2 * PAD - 24), 6 };
         int qTop = (int)artR.y + 50, qRowH = 33;
         int qVisible = (ARTS - 50 - 12) / qRowH;
         int qcount = playlist_count(&g_pl);
+        Rectangle clearR = { artR.x + artR.width - 70, artR.y + 12, 54, 22 };  // queue "Clear" button
         // EQ panel geometry (lives in the art square)
         int eqTop = (int)artR.y + 60, eqBot = (int)(artR.y + artR.height) - 48;
         float eqSp = artR.width / 10.0f;
@@ -359,6 +383,7 @@ int main(int argc, char **argv) {
         g_hv[HV_QUEUE] = approach(g_hv[HV_QUEUE], CheckCollisionPointRec(mp, queueR), dt);
         g_hv[HV_EQ]    = approach(g_hv[HV_EQ],    CheckCollisionPointRec(mp, eqR), dt);
         g_hv[HV_SET]   = approach(g_hv[HV_SET],   CheckCollisionPointRec(mp, setR), dt);
+        g_hv[HV_LYR]   = approach(g_hv[HV_LYR],   CheckCollisionPointRec(mp, lyrR), dt);
         g_hv[HV_MIN]   = approach(g_hv[HV_MIN],   CheckCollisionPointRec(mp, minR), dt);
         g_hv[HV_CLOSE] = approach(g_hv[HV_CLOSE], CheckCollisionPointRec(mp, closeR), dt);
         g_hv[HV_PLAY]  = approach(g_hv[HV_PLAY],  CheckCollisionPointRec(mp, playR), dt);
@@ -366,16 +391,17 @@ int main(int argc, char **argv) {
         g_hv[HV_NEXT]  = approach(g_hv[HV_NEXT],  CheckCollisionPointRec(mp, nextR), dt);
         g_hv[HV_SHUF]  = approach(g_hv[HV_SHUF],  CheckCollisionPointRec(mp, shufR), dt);
         g_hv[HV_REP]   = approach(g_hv[HV_REP],   CheckCollisionPointRec(mp, repR), dt);
-        g_hv[HV_ART]   = approach(g_hv[HV_ART],   !g_show_queue && !g_show_eq && !g_show_settings && CheckCollisionPointRec(mp, artR), dt);
+        g_hv[HV_ART]   = approach(g_hv[HV_ART],   !g_show_queue && !g_show_eq && !g_show_settings && !g_show_lyrics && CheckCollisionPointRec(mp, artR), dt);
 
         // ---- clicks ----
         if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             if (CheckCollisionPointRec(mp, closeR)) break;
             else if (CheckCollisionPointRec(mp, minR)) MinimizeWindow();
             else if (CheckCollisionPointRec(mp, openR)) open_dialog();
-            else if (CheckCollisionPointRec(mp, queueR)) { g_show_queue = !g_show_queue; if (g_show_queue) { g_show_eq = false; g_show_settings = false; } }
-            else if (CheckCollisionPointRec(mp, eqR)) { g_show_eq = !g_show_eq; if (g_show_eq) { g_show_queue = false; g_show_settings = false; } }
-            else if (CheckCollisionPointRec(mp, setR)) { g_show_settings = !g_show_settings; if (g_show_settings) { g_show_queue = false; g_show_eq = false; } }
+            else if (CheckCollisionPointRec(mp, queueR)) { g_show_queue = !g_show_queue; if (g_show_queue) { g_show_eq = g_show_settings = g_show_lyrics = false; } }
+            else if (CheckCollisionPointRec(mp, eqR)) { g_show_eq = !g_show_eq; if (g_show_eq) { g_show_queue = g_show_settings = g_show_lyrics = false; } }
+            else if (CheckCollisionPointRec(mp, setR)) { g_show_settings = !g_show_settings; if (g_show_settings) { g_show_queue = g_show_eq = g_show_lyrics = false; } }
+            else if (CheckCollisionPointRec(mp, lyrR)) { g_show_lyrics = !g_show_lyrics; if (g_show_lyrics) { g_show_queue = g_show_eq = g_show_settings = false; } }
             else if (g_show_settings && CheckCollisionPointRec(mp, artR)) {
                 int ry0 = (int)artR.y + 64, rowH = 48;
                 int row = ((int)mp.y - ry0) / rowH;
@@ -402,6 +428,7 @@ int main(int argc, char **argv) {
                     }
                 }
             }
+            else if (g_show_queue && CheckCollisionPointRec(mp, clearR)) { playlist_clear(&g_pl); reset_now_playing(); g_queue_scroll = 0; }
             else if (g_show_queue && CheckCollisionPointRec(mp, (Rectangle){ artR.x, (float)qTop, artR.width, (float)(qVisible * qRowH) })) {
                 int idx = g_queue_scroll + ((int)mp.y - qTop) / qRowH;
                 if (idx >= 0 && idx < qcount) {
@@ -410,7 +437,7 @@ int main(int argc, char **argv) {
                         if (removedCur) {
                             const char *p = playlist_current(&g_pl);
                             if (p) load_file(p);
-                            else { audio_stop(g_audio); snprintf(g_title, sizeof(g_title), "Drop a track to begin"); g_fmt[0] = 0; }
+                            else reset_now_playing();
                         }
                         int maxs = playlist_count(&g_pl) - qVisible; if (maxs < 0) maxs = 0;
                         if (g_queue_scroll > maxs) g_queue_scroll = maxs;
@@ -426,7 +453,7 @@ int main(int argc, char **argv) {
                     }
                 }
             }
-            else if (!g_show_queue && !g_show_eq && !g_show_settings && CheckCollisionPointRec(mp, artR)) g_art_mode = (g_art_mode + 1) % 3;
+            else if (!g_show_queue && !g_show_eq && !g_show_settings && !g_show_lyrics && CheckCollisionPointRec(mp, artR)) g_art_mode = (g_art_mode + 1) % 3;
             else if (loaded && CheckCollisionPointRec(mp, playR)) { if (playing) audio_pause(g_audio); else audio_play(g_audio); }
             else if (CheckCollisionPointRec(mp, prevR)) { if (playlist_has_prev(&g_pl)) load_file(playlist_prev(&g_pl)); else if (loaded) audio_seek_seconds(g_audio, 0); }
             else if (CheckCollisionPointRec(mp, nextR)) { if (playlist_has_next(&g_pl)) load_file(playlist_next(&g_pl)); }
@@ -472,6 +499,10 @@ int main(int argc, char **argv) {
             if (g_show_queue) {
                 g_queue_scroll -= (int)wheel; int maxs = qcount - qVisible; if (maxs < 0) maxs = 0;
                 if (g_queue_scroll < 0) g_queue_scroll = 0; if (g_queue_scroll > maxs) g_queue_scroll = maxs;
+            } else if (g_show_lyrics && !g_lyrics.synced) {
+                g_lyrics_scroll -= (int)(wheel * 28);
+                int maxs = g_lyrics.count * 24 - (ARTS - 80); if (maxs < 0) maxs = 0;
+                if (g_lyrics_scroll < 0) g_lyrics_scroll = 0; if (g_lyrics_scroll > maxs) g_lyrics_scroll = maxs;
             } else if (g_audio) audio_set_volume(g_audio, audio_get_volume(g_audio) + wheel * 0.05f);
         }
         if (IsKeyPressed(KEY_SPACE) && loaded) { if (playing) audio_pause(g_audio); else audio_play(g_audio); }
@@ -479,9 +510,10 @@ int main(int argc, char **argv) {
         if (loaded && IsKeyPressed(KEY_LEFT))  audio_seek_seconds(g_audio, audio_position_seconds(g_audio) - 5);
         if (g_audio && IsKeyPressed(KEY_UP))   audio_set_volume(g_audio, audio_get_volume(g_audio) + 0.05f);
         if (g_audio && IsKeyPressed(KEY_DOWN)) audio_set_volume(g_audio, audio_get_volume(g_audio) - 0.05f);
-        if (IsKeyPressed(KEY_Q)) { g_show_queue = !g_show_queue; if (g_show_queue) { g_show_eq = false; g_show_settings = false; } }
-        if (IsKeyPressed(KEY_E)) { g_show_eq = !g_show_eq; if (g_show_eq) { g_show_queue = false; g_show_settings = false; } }
-        if (IsKeyPressed(KEY_G)) { g_show_settings = !g_show_settings; if (g_show_settings) { g_show_queue = false; g_show_eq = false; } }
+        if (IsKeyPressed(KEY_Q)) { g_show_queue = !g_show_queue; if (g_show_queue) { g_show_eq = g_show_settings = g_show_lyrics = false; } }
+        if (IsKeyPressed(KEY_E)) { g_show_eq = !g_show_eq; if (g_show_eq) { g_show_queue = g_show_settings = g_show_lyrics = false; } }
+        if (IsKeyPressed(KEY_G)) { g_show_settings = !g_show_settings; if (g_show_settings) { g_show_queue = g_show_eq = g_show_lyrics = false; } }
+        if (IsKeyPressed(KEY_Y)) { g_show_lyrics = !g_show_lyrics; if (g_show_lyrics) { g_show_queue = g_show_eq = g_show_settings = false; } }
         if (IsKeyPressed(KEY_O)) open_dialog();
         if (IsKeyPressed(KEY_S)) playlist_set_shuffle(&g_pl, !playlist_shuffle(&g_pl));
         if (IsKeyPressed(KEY_L)) { g_repeat = (g_repeat + 1) % 3; playlist_set_loop(&g_pl, g_repeat == 2); }
@@ -513,8 +545,14 @@ int main(int argc, char **argv) {
             DrawRectangleRoundedLines(artR, 0.05f, 12, (Color){ 255, 255, 255, 14 });
             DrawTextEx(fEye, "QUEUE", (Vector2){ artR.x + 16, artR.y + 16 }, 12, 3.0f, alpha(g_accent, 200));
             char qcs[24]; snprintf(qcs, sizeof(qcs), "%d", qcount);
-            Vector2 qw = MeasureTextEx(fSmall, qcs, 13, 1.0f);
-            DrawTextEx(fSmall, qcs, (Vector2){ artR.x + artR.width - 16 - qw.x, artR.y + 16 }, 13, 1.0f, MUT);
+            Vector2 qhw = MeasureTextEx(fEye, "QUEUE", 12, 3.0f);
+            DrawTextEx(fSmall, qcs, (Vector2){ artR.x + 26 + qhw.x, artR.y + 15 }, 13, 1.0f, alpha(MUT, 160));
+            if (qcount > 0) {
+                bool ch = CheckCollisionPointRec(mp, clearR);
+                DrawRectangleRoundedLines(clearR, 0.5f, 8, ch ? alpha(g_accent, 200) : alpha(MUT, 120));
+                Vector2 clw = MeasureTextEx(fSmall, "Clear", 13, 0.3f);
+                DrawTextEx(fSmall, "Clear", (Vector2){ clearR.x + (clearR.width - clw.x) / 2, clearR.y + 4 }, 13, 0.3f, ch ? g_accent : MUT);
+            }
             int cur = playlist_index(&g_pl);
             for (int r = 0; r < qVisible; r++) {
                 int idx = g_queue_scroll + r;
@@ -613,6 +651,38 @@ int main(int argc, char **argv) {
             DrawTextEx(fMeta, "Timp", (Vector2){ artR.x + 20, artR.y + artR.height - 80 }, 16, 0.5f, alpha(TXT, 220));
             DrawTextEx(fSmall, "raylib edition", (Vector2){ artR.x + 20, artR.y + artR.height - 58 }, 13, 0.3f, MUT);
             DrawTextEx(fEye, "SPACE PLAY    Q QUEUE    E EQ    G SETTINGS", (Vector2){ artR.x + 20, artR.y + artR.height - 32 }, 10, 1.0f, alpha(MUT, 160));
+        } else if (g_show_lyrics) {
+            DrawRectangleRounded(artR, 0.05f, 12, (Color){ 20, 18, 14, 255 });
+            DrawRectangleRoundedLines(artR, 0.05f, 12, (Color){ 255, 255, 255, 14 });
+            DrawTextEx(fEye, "LYRICS", (Vector2){ artR.x + 16, artR.y + 18 }, 12, 3.0f, alpha(g_accent, 205));
+            if (g_lyrics.count == 0) {
+                const char *msg = g_lyrics_fetching ? "Searching lyrics…" : "No lyrics found";
+                Vector2 mw = MeasureTextEx(fMeta, msg, 16, 0.3f);
+                DrawTextEx(fMeta, msg, (Vector2){ artR.x + (artR.width - mw.x) / 2, artR.y + artR.height / 2 - 10 }, 16, 0.3f, alpha(MUT, 150));
+            } else if (g_lyrics.synced) {
+                double lp = g_audio ? audio_position_seconds(g_audio) : 0;
+                int active = lyrics_active(&g_lyrics, lp);
+                int lineH = 28;
+                float ctr = artR.y + artR.height / 2;
+                for (int i = 0; i < g_lyrics.count; i++) {
+                    float yy = ctr + (i - active) * lineH - 9;
+                    if (yy < artR.y + 44 || yy > artR.y + artR.height - 28) continue;
+                    bool act = (i == active);
+                    Color c = act ? TXT : alpha(MUT, 120);
+                    float sz = act ? 17 : 15;
+                    Vector2 tw = MeasureTextEx(fMeta, g_lyrics.lines[i].text, sz, 0.2f);
+                    if (tw.x <= artR.width - 24) DrawTextEx(fMeta, g_lyrics.lines[i].text, (Vector2){ artR.x + (artR.width - tw.x) / 2, yy }, sz, 0.2f, c);
+                    else draw_fit(fMeta, g_lyrics.lines[i].text, (Vector2){ artR.x + 12, yy }, sz, 0.2f, c, artR.width - 24);
+                }
+            } else {
+                int lineH = 24;
+                float top = artR.y + 46 - g_lyrics_scroll;
+                for (int i = 0; i < g_lyrics.count; i++) {
+                    float yy = top + i * lineH;
+                    if (yy < artR.y + 40 || yy > artR.y + artR.height - 12) continue;
+                    draw_fit(fMeta, g_lyrics.lines[i].text, (Vector2){ artR.x + 18, yy }, 15, 0.2f, alpha(TXT, 210), artR.width - 36);
+                }
+            }
         } else if (g_art_mode == 0) {
             soft_shadow(artR, 0.08f, 10, 150);
             if (g_has_cover) DrawTexturePro(g_cover, (Rectangle){ 0, 0, (float)g_cover.width, (float)g_cover.height }, artR, (Vector2){ 0, 0 }, 0, WHITE);
@@ -670,6 +740,11 @@ int main(int argc, char **argv) {
             DrawLineEx((Vector2){ gc.x + cosf(a) * 6, gc.y + sinf(a) * 6 }, (Vector2){ gc.x + cosf(a) * 9, gc.y + sinf(a) * 9 }, 2.0f, cS);
         }
         DrawRing(gc, 3.5f, 6.0f, 0, 360, 24, cS);
+        // lyrics button — music note
+        Color cL = g_show_lyrics ? g_accent : clerp(MUT, TXT, g_hv[HV_LYR]);
+        DrawCircle((int)(lyrR.x + 8), (int)(lyrR.y + 16), 3, cL);
+        DrawLineEx((Vector2){ lyrR.x + 10.5f, lyrR.y + 16 }, (Vector2){ lyrR.x + 10.5f, lyrR.y + 5 }, 1.8f, cL);
+        DrawLineEx((Vector2){ lyrR.x + 10.5f, lyrR.y + 5 }, (Vector2){ lyrR.x + 17, lyrR.y + 7 }, 1.8f, cL);
         // centered wordmark
         Vector2 wmw = MeasureTextEx(fEye, "TIMP", 13, 5.0f);
         DrawTextEx(fEye, "TIMP", (Vector2){ (WW - wmw.x) / 2, 14 }, 13, 5.0f, alpha(MUT, 190));

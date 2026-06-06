@@ -16,6 +16,7 @@ Audio* audio_create(void);
 void audio_destroy(Audio* a);
 
 bool audio_load(Audio* a, const char* path);
+void audio_unload(Audio* a);   // fully release the decoder (audio_is_loaded → false)
 void audio_play(Audio* a);
 void audio_pause(Audio* a);
 void audio_stop(Audio* a);

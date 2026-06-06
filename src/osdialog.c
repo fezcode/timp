@@ -8,6 +8,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <commdlg.h>
+#include <dwmapi.h>
 
 static char *w_to_utf8(const wchar_t *w) {
     int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
@@ -53,8 +54,12 @@ int os_open_audio_files(void (*on_file)(const char *, void *), void *ud) {
 }
 
 void os_round_window(void *hwnd, int w, int h, int radius) {
-    HRGN rgn = CreateRoundRectRgn(0, 0, w + 1, h + 1, radius * 2, radius * 2);
-    SetWindowRgn((HWND)hwnd, rgn, TRUE);  // window takes ownership of rgn
+    (void)w; (void)h; (void)radius;
+    // Win11 DWM rounded corners — composited and anti-aliased (unlike a region
+    // clip, which is hard-edged/jagged). 33 = DWMWA_WINDOW_CORNER_PREFERENCE,
+    // 2 = DWMWCP_ROUND.
+    DWORD pref = 2;
+    DwmSetWindowAttribute((HWND)hwnd, 33, &pref, sizeof(pref));
 }
 
 #else

@@ -151,6 +151,16 @@ bool audio_load(Audio* a, const char* path) {
     return true;
 }
 
+void audio_unload(Audio* a) {
+    a->playing = false;
+    a->finished_flag = false;
+    ma_mutex_lock(&a->mutex);
+    if (a->decoder_inited) { ma_decoder_uninit(&a->decoder); a->decoder_inited = false; }
+    a->length_frames = 0;
+    a->path[0] = 0;
+    ma_mutex_unlock(&a->mutex);
+}
+
 void audio_play(Audio* a) {
     if (!a->decoder_inited) return;
     if (a->finished_flag) {

@@ -142,3 +142,82 @@ bool tags_read(const char *path, Tags *out) {
     fclose(f);
     return ok;
 }
+
+bool tags_lyrics(const char *path, char *out, int cap) {
+    out[0] = 0;
+    FILE *f = open_rb(path);
+    if (!f) return false;
+    bool ok = false;
+
+    // --- ID3v2 USLT (MP3): enc(1) + lang(3) + descriptor(null) + lyrics ---
+    unsigned char h[10]; rewind(f);
+    if (fread(h, 1, 10, f) == 10 && !memcmp(h, "ID3", 3)) {
+        int ver = h[3]; unsigned size = syncsafe(h + 6);
+        if (size > 0 && size < 32u * 1024 * 1024) {
+            unsigned char *buf = (unsigned char *)malloc(size);
+            if (buf && fread(buf, 1, size, f) == size) {
+                unsigned pos = 0;
+                while (pos + 10 <= size) {
+                    if (buf[pos] == 0) break;
+                    unsigned fsz = (ver >= 4) ? syncsafe(buf + pos + 4) : be32(buf + pos + 4);
+                    if (fsz == 0 || pos + 10 + fsz > size) break;
+                    if (!memcmp(buf + pos, "USLT", 4) && fsz >= 5) {
+                        const unsigned char *p = buf + pos + 10, *end = p + fsz;
+                        unsigned char enc = p[0];
+                        const unsigned char *q = p + 4;  // skip enc + 3-byte language
+                        if (enc == 1 || enc == 2) { while (q + 1 < end && (q[0] || q[1])) q += 2; if (q + 1 < end) q += 2; }
+                        else { while (q < end && *q) q++; if (q < end) q++; }
+                        decode_text(enc, q, (int)(end - q), out, cap);
+                        ok = out[0] != 0;
+                        break;
+                    }
+                    pos += 10 + fsz;
+                }
+            }
+            free(buf);
+        }
+    }
+
+    // --- FLAC Vorbis comment LYRICS / UNSYNCEDLYRICS ---
+    if (!ok) {
+        unsigned char m[4]; rewind(f);
+        if (fread(m, 1, 4, f) == 4 && !memcmp(m, "fLaC", 4)) {
+            for (;;) {
+                unsigned char bh[4]; if (fread(bh, 1, 4, f) != 4) break;
+                int last = bh[0] & 0x80, type = bh[0] & 0x7f; unsigned len = be24(bh + 1);
+                if (type == 4) {
+                    if (len <= 8u * 1024 * 1024) {
+                        unsigned char *b = (unsigned char *)malloc(len);
+                        if (b && fread(b, 1, len, f) == len) {
+                            unsigned p = 0;
+                            if (p + 4 <= len) { unsigned vl = le32(b + p); p += 4 + vl; }
+                            if (p + 4 <= len) {
+                                unsigned cnt = le32(b + p); p += 4;
+                                for (unsigned i = 0; i < cnt && p + 4 <= len; i++) {
+                                    unsigned cl = le32(b + p); p += 4;
+                                    if (p + cl > len) break;
+                                    const char *c = (const char *)(b + p);
+                                    const char *eq = (const char *)memchr(c, '=', cl);
+                                    if (eq) {
+                                        int kl = (int)(eq - c);
+                                        if ((kl == 6 && ci_eq(c, "LYRICS", 6)) || (kl == 14 && ci_eq(c, "UNSYNCEDLYRICS", 14))) {
+                                            int vl2 = (int)cl - kl - 1, nn = vl2 < cap - 1 ? vl2 : cap - 1; if (nn < 0) nn = 0;
+                                            memcpy(out, eq + 1, nn); out[nn] = 0; ok = out[0] != 0;
+                                        }
+                                    }
+                                    p += cl;
+                                    if (ok) break;
+                                }
+                            }
+                        }
+                        free(b);
+                    }
+                    break;
+                } else if (fseek(f, (long)len, SEEK_CUR)) break;
+                if (last) break;
+            }
+        }
+    }
+    fclose(f);
+    return ok;
+}
