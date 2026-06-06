@@ -4,7 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <SDL2/SDL.h>
 #include "../vendor/miniaudio.h"
 
 #ifdef _WIN32
@@ -33,7 +32,8 @@ struct Audio {
 
     float capture[VIZ_SAMPLES];
     int capture_pos;
-    SDL_mutex* mutex;
+    ma_mutex mutex;
+    ma_uint64 length_frames;   // cached on load (avoids per-frame decoder access)
 
     Eq eq;
 };
@@ -49,14 +49,16 @@ static void data_callback(ma_device* dev, void* output, const void* input, ma_ui
     if (!a->decoder_inited || !a->playing) return;
 
     ma_uint64 read = 0;
+    ma_mutex_lock(&a->mutex);                                   // guard decoder vs. main-thread seek/load
     ma_decoder_read_pcm_frames(&a->decoder, out, frames, &read);
+    ma_mutex_unlock(&a->mutex);
 
     float v = a->volume;
     for (size_t i = 0; i < (size_t)read * channels; i++) out[i] *= v;
 
     eq_process(&a->eq, out, (int)read, (int)channels);
 
-    SDL_LockMutex(a->mutex);
+    ma_mutex_lock(&a->mutex);
     int pos = a->capture_pos;
     for (ma_uint64 i = 0; i < read; i++) {
         float mono = 0.f;
@@ -66,7 +68,7 @@ static void data_callback(ma_device* dev, void* output, const void* input, ma_ui
         pos = (pos + 1) % VIZ_SAMPLES;
     }
     a->capture_pos = pos;
-    SDL_UnlockMutex(a->mutex);
+    ma_mutex_unlock(&a->mutex);
 
     if (read < frames) {
         a->playing = false;
@@ -78,7 +80,7 @@ Audio* audio_create(void) {
     Audio* a = (Audio*)calloc(1, sizeof(Audio));
     if (!a) return NULL;
     a->volume = 0.7f;
-    a->mutex = SDL_CreateMutex();
+    ma_mutex_init(&a->mutex);
 
     ma_device_config cfg = ma_device_config_init(ma_device_type_playback);
     cfg.playback.format = ma_format_f32;
@@ -89,7 +91,7 @@ Audio* audio_create(void) {
 
     if (ma_device_init(NULL, &cfg, &a->device) != MA_SUCCESS) {
         fprintf(stderr, "audio: ma_device_init failed\n");
-        SDL_DestroyMutex(a->mutex);
+        ma_mutex_uninit(&a->mutex);
         free(a);
         return NULL;
     }
@@ -107,17 +109,19 @@ void audio_destroy(Audio* a) {
     if (!a) return;
     if (a->device_inited) ma_device_uninit(&a->device);
     if (a->decoder_inited) ma_decoder_uninit(&a->decoder);
-    if (a->mutex) SDL_DestroyMutex(a->mutex);
+    ma_mutex_uninit(&a->mutex);
     free(a);
 }
 
 bool audio_load(Audio* a, const char* path) {
+    a->playing = false;            // stop the callback touching the decoder first
+    a->finished_flag = false;
+    ma_mutex_lock(&a->mutex);
     if (a->decoder_inited) {
         ma_decoder_uninit(&a->decoder);
         a->decoder_inited = false;
     }
-    a->playing = false;
-    a->finished_flag = false;
+    ma_mutex_unlock(&a->mutex);
 
     ma_decoder_config dc = ma_decoder_config_init(ma_format_f32, a->device.playback.channels,
                                                   a->device.sampleRate);
@@ -141,6 +145,8 @@ bool audio_load(Audio* a, const char* path) {
     }
 #endif
     a->decoder_inited = true;
+    a->length_frames = 0;          // cache length once (playing==false → callback idle)
+    ma_decoder_get_length_in_pcm_frames(&a->decoder, &a->length_frames);
     snprintf(a->path, sizeof(a->path), "%s", path);
     return true;
 }
@@ -148,7 +154,9 @@ bool audio_load(Audio* a, const char* path) {
 void audio_play(Audio* a) {
     if (!a->decoder_inited) return;
     if (a->finished_flag) {
+        ma_mutex_lock(&a->mutex);
         ma_decoder_seek_to_pcm_frame(&a->decoder, 0);
+        ma_mutex_unlock(&a->mutex);
         a->finished_flag = false;
     }
     a->playing = true;
@@ -158,7 +166,11 @@ void audio_pause(Audio* a) { a->playing = false; }
 
 void audio_stop(Audio* a) {
     a->playing = false;
-    if (a->decoder_inited) ma_decoder_seek_to_pcm_frame(&a->decoder, 0);
+    if (a->decoder_inited) {
+        ma_mutex_lock(&a->mutex);
+        ma_decoder_seek_to_pcm_frame(&a->decoder, 0);
+        ma_mutex_unlock(&a->mutex);
+    }
     a->finished_flag = false;
 }
 
@@ -179,34 +191,36 @@ float audio_get_volume(const Audio* a) { return a->volume; }
 double audio_position_seconds(const Audio* a) {
     if (!a->decoder_inited) return 0.0;
     ma_uint64 cursor = 0;
+    ma_mutex_lock((ma_mutex*)&a->mutex);
     ma_decoder_get_cursor_in_pcm_frames((ma_decoder*)&a->decoder, &cursor);
+    ma_mutex_unlock((ma_mutex*)&a->mutex);
     return (double)cursor / (double)a->decoder.outputSampleRate;
 }
 
 double audio_length_seconds(const Audio* a) {
     if (!a->decoder_inited) return 0.0;
-    ma_uint64 total = 0;
-    if (ma_decoder_get_length_in_pcm_frames((ma_decoder*)&a->decoder, &total) != MA_SUCCESS) return 0.0;
-    return (double)total / (double)a->decoder.outputSampleRate;
+    return (double)a->length_frames / (double)a->decoder.outputSampleRate;
 }
 
 void audio_seek_seconds(Audio* a, double seconds) {
     if (!a->decoder_inited) return;
     if (seconds < 0) seconds = 0;
     ma_uint64 frame = (ma_uint64)(seconds * (double)a->decoder.outputSampleRate);
+    ma_mutex_lock(&a->mutex);
     ma_decoder_seek_to_pcm_frame(&a->decoder, frame);
+    ma_mutex_unlock(&a->mutex);
     a->finished_flag = false;
 }
 
 int audio_snapshot_waveform(Audio* a, float* out, int n) {
     if (n > VIZ_SAMPLES) n = VIZ_SAMPLES;
-    SDL_LockMutex(a->mutex);
+    ma_mutex_lock(&a->mutex);
     int pos = a->capture_pos;
     int start = (pos - n + VIZ_SAMPLES) % VIZ_SAMPLES;
     for (int i = 0; i < n; i++) {
         out[i] = a->capture[(start + i) % VIZ_SAMPLES];
     }
-    SDL_UnlockMutex(a->mutex);
+    ma_mutex_unlock(&a->mutex);
     return n;
 }
 

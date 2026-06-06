@@ -6,3 +6,7 @@ vendor/stb_image.h
 *.exe
 *.log
 *.stackdump
+
+# raylib rewrite — local verification artifacts
+rl_shot*.png
+.superpowers/

@@ -28,16 +28,12 @@ Write-Host "`n[2/4] Staging clean payload in $stageDir..." -ForegroundColor Cyan
 if (Test-Path $stageDir) { Remove-Item $stageDir -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
 
-foreach ($name in @("timp.exe", "SDL2.dll")) {
-    $src = Join-Path $buildDir $name
-    if (-not (Test-Path $src)) { throw "Missing $name in $buildDir - run build.ps1 first." }
-    Copy-Item $src $stageDir -Force
-    Write-Host "  staged $name" -ForegroundColor DarkGray
-}
-$skinsSrc = Join-Path $buildDir "skins"
-if (-not (Test-Path $skinsSrc)) { throw "Missing skins\ in $buildDir - run build.ps1 first." }
-Copy-Item $skinsSrc $stageDir -Recurse -Force
-Write-Host "  staged skins\" -ForegroundColor DarkGray
+# raylib is statically linked, so the payload is a single standalone exe —
+# no SDL2.dll, no skins/ folder.
+$src = Join-Path $buildDir "timp.exe"
+if (-not (Test-Path $src)) { throw "Missing timp.exe in $buildDir - run build.ps1 first." }
+Copy-Item $src $stageDir -Force
+Write-Host "  staged timp.exe" -ForegroundColor DarkGray
 
 Write-Host "`n[3/4] Ensuring GUI-subsystem forge.exe..." -ForegroundColor Cyan
 if (-not (Test-Path $uninstaller)) {

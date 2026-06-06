@@ -56,7 +56,7 @@ target  = "${INSTALLDIR}/timp.exe"
 label   = "Run Timp after install"
 checked = true
 
-# Application payload — staged clean by installer.ps1 (timp.exe + SDL2.dll + skins/)
+# Application payload — staged clean by installer.ps1 (single standalone timp.exe)
 [[dirs]]
 src = "dist/win-x64"
 dst = "${INSTALLDIR}"
