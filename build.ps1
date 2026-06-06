@@ -21,10 +21,10 @@ if (-not $lf) { throw "raylib not found via pkg-config (install: 'pacman -S ming
 
 $flags   = @('-O2','-Wall','-Wextra','-Wno-unused-parameter','-std=c11','-Isrc') + $cf
 # -mwindows → GUI subsystem, so launching timp.exe never opens a console window.
-$winlibs = '-mwindows','-lopengl32','-lgdi32','-lwinmm','-lcomdlg32','-lole32','-luser32','-ldwmapi','-lwinhttp','-lm'
+$winlibs = '-mwindows','-lopengl32','-lgdi32','-lwinmm','-lcomdlg32','-lole32','-luser32','-ldwmapi','-lwinhttp','-lshell32','-lm'
 
 New-Item -ItemType Directory -Force -Path build | Out-Null
-$srcs = 'rl_main','audio','art','osdialog','tags','lyrics','rlconfig','mediakeys','fft','eq','playlist','vendor_ma'
+$srcs = 'rl_main','audio','art','osdialog','tags','lyrics','rlconfig','mediakeys','singleinst','fft','eq','playlist','vendor_ma'
 
 # Incremental: any .h change invalidates every .o (avoids stale-struct corruption).
 $newestHeader = (Get-ChildItem src\*.h | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime

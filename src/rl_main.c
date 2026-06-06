@@ -13,6 +13,7 @@
 #include "lyrics.h"
 #include "rlconfig.h"
 #include "mediakeys.h"
+#include "singleinst.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -26,6 +27,7 @@
 #define PAD  20
 #define TBH  40         // top bar height
 #define ARTS (WW - 2 * PAD)
+#define TIMP_VERSION "0.7.1"   // keep in sync with forge.toml
 
 // ---------- palette ----------
 static const Color BG0 = { 24, 21, 17, 255 };
@@ -238,6 +240,21 @@ static void ic_repeat(float cx, float cy, float r, Color c) {
 }
 
 int main(int argc, char **argv) {
+    // Decode the real Unicode args (Windows argv is ANSI — Turkish "İ"/"ı" etc.
+    // arrive mangled and fail to open). args[0] is the program, args[1..] paths.
+    int argn = 0;
+    char **args = os_args_utf8(argc, argv, &argn);
+
+    // Single instance: if a Timp is already running, hand it our song(s) (or just
+    // raise it) and bow out before creating a window or grabbing the audio device.
+    if (!singleinst_acquire()) {
+        bool sent = false;
+        for (int i = 1; i < argn; i++) if (singleinst_send_file(args[i])) sent = true;
+        if (!sent) singleinst_send_focus();
+        return 0;
+    }
+    singleinst_listen_start();
+
     playlist_init(&g_pl);
     SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_UNDECORATED);
     SetTraceLogLevel(LOG_WARNING);
@@ -296,7 +313,7 @@ int main(int argc, char **argv) {
     if (g_aot) SetWindowState(FLAG_WINDOW_TOPMOST);
     if (cfg.has_win_pos) SetWindowPosition(cfg.win_x, cfg.win_y);
 
-    if (argc > 1) { for (int i = 1; i < argc; i++) playlist_add(&g_pl, argv[i]); load_file(playlist_current(&g_pl)); }
+    if (argn > 1) { for (int i = 1; i < argn; i++) playlist_add(&g_pl, args[i]); load_file(playlist_current(&g_pl)); }
     if (getenv("TIMP_QUEUE")) g_show_queue = true;
     if (getenv("TIMP_EQ")) g_show_eq = true;
     if (getenv("TIMP_SET")) g_show_settings = true;
@@ -326,6 +343,21 @@ int main(int argc, char **argv) {
             default: break;
         }
         if (lyrics_fetch_poll(&g_lyrics)) g_lyrics_fetching = false;
+        // songs forwarded from a second launch → append to the queue and play the
+        // first newly-added one (single-instance "append & play").
+        {
+            char fwd[4096];
+            int firstNew = -1;
+            while (singleinst_poll_file(fwd, sizeof fwd)) {
+                playlist_add(&g_pl, fwd);
+                if (firstNew < 0) firstNew = playlist_count(&g_pl) - 1;
+            }
+            if (firstNew >= 0) {
+                playlist_set_index(&g_pl, firstNew);
+                load_file(playlist_current(&g_pl));
+            }
+            if (singleinst_poll_focus()) os_focus_window(GetWindowHandle());
+        }
         // drag-drop APPENDS to the queue (keeps what's already there)
         if (IsFileDropped()) {
             FilePathList d = LoadDroppedFiles();
@@ -649,6 +681,9 @@ int main(int argc, char **argv) {
                 }
             }
             DrawTextEx(fMeta, "Timp", (Vector2){ artR.x + 20, artR.y + artR.height - 80 }, 16, 0.5f, alpha(TXT, 220));
+            const char *verStr = "v" TIMP_VERSION;
+            Vector2 verW = MeasureTextEx(fSmall, verStr, 13, 0.3f);
+            DrawTextEx(fSmall, verStr, (Vector2){ artR.x + artR.width - 20 - verW.x, artR.y + artR.height - 76 }, 13, 0.3f, alpha(MUT, 200));
             DrawTextEx(fSmall, "raylib edition", (Vector2){ artR.x + 20, artR.y + artR.height - 58 }, 13, 0.3f, MUT);
             DrawTextEx(fEye, "SPACE PLAY    Q QUEUE    E EQ    G SETTINGS", (Vector2){ artR.x + 20, artR.y + artR.height - 32 }, 10, 1.0f, alpha(MUT, 160));
         } else if (g_show_lyrics) {

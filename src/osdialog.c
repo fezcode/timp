@@ -9,6 +9,7 @@
 #include <windows.h>
 #include <commdlg.h>
 #include <dwmapi.h>
+#include <shellapi.h>
 
 static char *w_to_utf8(const wchar_t *w) {
     int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
@@ -62,6 +63,28 @@ void os_round_window(void *hwnd, int w, int h, int radius) {
     DwmSetWindowAttribute((HWND)hwnd, 33, &pref, sizeof(pref));
 }
 
+char **os_args_utf8(int argc, char **argv, int *out_count) {
+    (void)argc; (void)argv;
+    int wc = 0;
+    LPWSTR *wargv = CommandLineToArgvW(GetCommandLineW(), &wc);
+    if (!wargv) { *out_count = 0; return NULL; }
+    // Allocated once for the process lifetime; never freed (mirrors argv's lifetime).
+    char **out = (char **)calloc((size_t)wc, sizeof(char *));
+    if (!out) { LocalFree(wargv); *out_count = 0; return NULL; }
+    for (int i = 0; i < wc; i++) out[i] = w_to_utf8(wargv[i]);
+    LocalFree(wargv);
+    *out_count = wc;
+    return out;
+}
+
+void os_focus_window(void *hwnd) {
+    HWND h = (HWND)hwnd;
+    if (!h) return;
+    if (IsIconic(h)) ShowWindow(h, SW_RESTORE);
+    SetForegroundWindow(h);
+    BringWindowToTop(h);
+}
+
 #else
 int os_open_audio_files(void (*on_file)(const char *, void *), void *ud) {
     (void)on_file; (void)ud;
@@ -70,4 +93,9 @@ int os_open_audio_files(void (*on_file)(const char *, void *), void *ud) {
 void os_round_window(void *hwnd, int w, int h, int radius) {
     (void)hwnd; (void)w; (void)h; (void)radius;
 }
+char **os_args_utf8(int argc, char **argv, int *out_count) {
+    *out_count = argc;
+    return argv;
+}
+void os_focus_window(void *hwnd) { (void)hwnd; }
 #endif
