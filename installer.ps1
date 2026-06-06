@@ -12,9 +12,9 @@ $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
 $forgeRoot   = Resolve-Path $ForgeDir
-$forgeGui    = Join-Path $forgeRoot "forge-gui.exe"
+$forgeGui    = Join-Path $forgeRoot "build\forge.exe"
 $forgeSrc    = Join-Path $forgeRoot "cmd\forge"
-$uninstaller = Join-Path $forgeRoot "uninstall.exe"
+$uninstaller = Join-Path $forgeRoot "build\uninstall.exe"
 $buildDir    = Join-Path $PSScriptRoot "build"
 $stageDir    = Join-Path $PSScriptRoot "dist\win-x64"
 $outDir      = Join-Path $PSScriptRoot "dist\installer"
@@ -55,8 +55,8 @@ if ($needBuild) {
     Write-Host "  building $forgeGui..." -ForegroundColor DarkGray
     Push-Location $forgeRoot
     try {
-        go build -tags "desktop,production" -ldflags "-H windowsgui -X main.Version=local-gui" -o forge-gui.exe ./cmd/forge/
-        if ($LASTEXITCODE -ne 0) { throw "go build forge-gui.exe failed (exit $LASTEXITCODE)" }
+        go build -tags "desktop,production" -ldflags "-H windowsgui -X main.Version=local-gui" -o build\forge.exe ./cmd/forge/
+        if ($LASTEXITCODE -ne 0) { throw "go build forge.exe failed (exit $LASTEXITCODE)" }
     } finally { Pop-Location }
 } else {
     Write-Host "  up to date: $forgeGui" -ForegroundColor DarkGray
@@ -64,7 +64,7 @@ if ($needBuild) {
 
 Write-Host "`n[4/4] Building Setup.exe..." -ForegroundColor Cyan
 
-# forge-gui.exe is a GUI-subsystem binary, so $LASTEXITCODE is not propagated
+# forge.exe is a GUI-subsystem binary, so $LASTEXITCODE is not propagated
 # through PowerShell's call operator. Use Start-Process -Wait -PassThru instead.
 function Invoke-Forge {
     param([string[]]$ForgeArgs)
