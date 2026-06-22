@@ -27,7 +27,7 @@
 #define PAD  20
 #define TBH  40         // top bar height
 #define ARTS (WW - 2 * PAD)
-#define TIMP_VERSION "0.7.2"   // keep in sync with forge.toml
+#define TIMP_VERSION "0.7.3"   // keep in sync with forge.toml
 
 // ---------- palette ----------
 static const Color BG0 = { 24, 21, 17, 255 };

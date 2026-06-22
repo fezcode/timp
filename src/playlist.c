@@ -4,9 +4,35 @@
 #include <string.h>
 #include <time.h>
 
+// ---------- shuffle history ----------
+// Forget the trail (keeps the allocation for reuse). Called whenever the trail
+// would become meaningless: a manual jump, a shuffle toggle, or a structural
+// edit that shifts indices.
+static void hist_reset(Playlist* p) {
+    p->hist_count = 0;
+    p->hist_pos = -1;
+}
+
+// Append a freshly-visited index and point the cursor at it.
+static void hist_append(Playlist* p, int idx) {
+    if (p->hist_count == p->hist_cap) {
+        p->hist_cap = p->hist_cap ? p->hist_cap * 2 : 16;
+        p->history = (int*)realloc(p->history, sizeof(int) * p->hist_cap);
+    }
+    p->history[p->hist_count++] = idx;
+    p->hist_pos = p->hist_count - 1;
+}
+
+// On the first shuffle move from a fresh anchor, seed the trail with the track
+// we're leaving so prev can return to it.
+static void hist_ensure_seed(Playlist* p) {
+    if (p->hist_count == 0 && p->index >= 0) hist_append(p, p->index);
+}
+
 void playlist_init(Playlist* p) {
     memset(p, 0, sizeof(*p));
     p->index = -1;
+    p->hist_pos = -1;
     static int seeded = 0;
     if (!seeded) { srand((unsigned)time(NULL)); seeded = 1; }
 }
@@ -15,6 +41,7 @@ void playlist_clear(Playlist* p) {
     for (int i = 0; i < p->count; i++) free(p->paths[i]);
     p->count = 0;
     p->index = -1;
+    hist_reset(p);
 }
 
 void playlist_free(Playlist* p) {
@@ -22,6 +49,9 @@ void playlist_free(Playlist* p) {
     free(p->paths);
     p->paths = NULL;
     p->cap = 0;
+    free(p->history);
+    p->history = NULL;
+    p->hist_cap = 0;
 }
 
 static char* dupstr(const char* s) {
@@ -54,6 +84,7 @@ bool playlist_remove(Playlist* p, int idx) {
     } else if (p->index > idx) {
         p->index--;
     }
+    hist_reset(p);   // indices shifted — the shuffle trail is no longer valid
     return was_current;
 }
 
@@ -77,6 +108,7 @@ void playlist_move(Playlist* p, int from, int to) {
     else if (from < cur && cur <= to) cur--;
     else if (to <= cur && cur < from) cur++;
     p->index = cur;
+    hist_reset(p);   // indices shifted — the shuffle trail is no longer valid
 }
 
 const char* playlist_current(const Playlist* p) {
@@ -93,7 +125,8 @@ bool playlist_has_next(const Playlist* p) {
 
 bool playlist_has_prev(const Playlist* p) {
     if (p->count == 0) return false;
-    if (p->shuffle && p->count > 1) return true;
+    // In shuffle, prev only means "go back through what we've already played".
+    if (p->shuffle && p->count > 1) return p->hist_pos > 0;
     if (p->index > 0) return true;
     return p->loop && p->count > 0;
 }
@@ -101,9 +134,17 @@ bool playlist_has_prev(const Playlist* p) {
 const char* playlist_next(Playlist* p) {
     if (p->count == 0) return NULL;
     if (p->shuffle && p->count > 1) {
-        int next;
-        do { next = rand() % p->count; } while (next == p->index);
-        p->index = next;
+        hist_ensure_seed(p);
+        // If we'd previously stepped back, next replays the same forward trail
+        // before generating anything new.
+        if (p->hist_pos + 1 < p->hist_count && p->history[p->hist_pos + 1] < p->count) {
+            p->index = p->history[++p->hist_pos];
+        } else {
+            int next;
+            do { next = rand() % p->count; } while (next == p->index);
+            p->index = next;
+            hist_append(p, next);
+        }
     } else if (p->index + 1 < p->count) {
         p->index++;
     } else if (p->loop) {
@@ -117,9 +158,12 @@ const char* playlist_next(Playlist* p) {
 const char* playlist_prev(Playlist* p) {
     if (p->count == 0) return NULL;
     if (p->shuffle && p->count > 1) {
-        int next;
-        do { next = rand() % p->count; } while (next == p->index);
-        p->index = next;
+        // Walk back up the play-history instead of re-randomizing.
+        if (p->hist_pos > 0 && p->history[p->hist_pos - 1] < p->count) {
+            p->index = p->history[--p->hist_pos];
+        } else {
+            return NULL;   // nothing earlier in the trail
+        }
     } else if (p->index > 0) {
         p->index--;
     } else if (p->loop) {
@@ -131,13 +175,19 @@ const char* playlist_prev(Playlist* p) {
 }
 
 void playlist_set_index(Playlist* p, int i) {
-    if (i >= 0 && i < p->count) p->index = i;
+    if (i >= 0 && i < p->count) {
+        p->index = i;
+        hist_reset(p);   // a manual jump starts a fresh shuffle trail from here
+    }
 }
 
 int playlist_count(const Playlist* p) { return p->count; }
 int playlist_index(const Playlist* p) { return p->index; }
 
-void playlist_set_shuffle(Playlist* p, bool on) { p->shuffle = on; }
+void playlist_set_shuffle(Playlist* p, bool on) {
+    if (p->shuffle != on) hist_reset(p);   // start a fresh trail from the current track
+    p->shuffle = on;
+}
 void playlist_set_loop(Playlist* p, bool on) { p->loop = on; }
 bool playlist_shuffle(const Playlist* p) { return p->shuffle; }
 bool playlist_loop(const Playlist* p) { return p->loop; }

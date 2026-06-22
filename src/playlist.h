@@ -11,6 +11,14 @@ typedef struct Playlist {
 
     bool shuffle;
     bool loop;
+
+    // Shuffle play-history: the track indices the user has actually landed on,
+    // in order, with a cursor. Lets prev/next in shuffle mode walk the real
+    // listening trail instead of re-randomizing on every press.
+    int* history;
+    int  hist_count;
+    int  hist_cap;
+    int  hist_pos;   // cursor into history; history[hist_pos] == index
 } Playlist;
 
 void playlist_init(Playlist* p);
