@@ -33,12 +33,22 @@ Write-Host "`n[2/4] Staging clean payload in $stageDir..." -ForegroundColor Cyan
 if (Test-Path $stageDir) { Remove-Item $stageDir -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
 
-# raylib is statically linked, so the payload is a single standalone exe —
-# no SDL2.dll, no skins/ folder.
+# The payload is timp.exe plus the MinGW runtime DLLs build.ps1 bundled
+# (libraylib.dll, glfw3.dll, libwinpthread-1.dll) — raylib links glfw as a DLL,
+# so the exe is not standalone and these must ship with it.
 $src = Join-Path $buildDir "timp.exe"
 if (-not (Test-Path $src)) { throw "Missing timp.exe in $buildDir - run build.ps1 first." }
 Copy-Item $src $stageDir -Force
 Write-Host "  staged timp.exe" -ForegroundColor DarkGray
+
+$dlls = @(Get-ChildItem (Join-Path $buildDir "*.dll") -ErrorAction SilentlyContinue)
+if ($dlls.Count -eq 0) {
+    throw "No runtime DLLs found in $buildDir. build.ps1 should have bundled libraylib.dll/glfw3.dll/libwinpthread-1.dll - rebuild with build.ps1 (not -SkipBuild on a stale build dir)."
+}
+foreach ($d in $dlls) {
+    Copy-Item $d.FullName $stageDir -Force
+    Write-Host "  staged $($d.Name)" -ForegroundColor DarkGray
+}
 
 Write-Host "`n[3/4] Ensuring GUI-subsystem forge.exe..." -ForegroundColor Cyan
 if (-not (Test-Path $uninstaller)) {

@@ -1,5 +1,9 @@
-# Build Timp (raylib edition) — produces a standalone build\timp.exe.
-# raylib is linked statically, so no DLLs are shipped alongside the binary.
+# Build Timp (raylib edition) — produces build\timp.exe plus the MinGW runtime
+# DLLs it loads. The MSYS2 raylib package links glfw as a DLL (and pulls in
+# winpthread), so timp.exe is NOT a single static binary: it needs libraylib.dll,
+# glfw3.dll and libwinpthread-1.dll beside it. This script auto-bundles whatever
+# non-system DLLs the exe imports (transitively) into build\ so it runs on
+# machines without MSYS2.
 $ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
@@ -55,3 +59,35 @@ $linkObjs = if ($rcObj) { $objs + $rcObj } else { $objs }
 & $gcc @linkObjs -o build\timp.exe @lf @winlibs
 if ($LASTEXITCODE -ne 0) { throw 'link failed' }
 Write-Output ('built ' + (Resolve-Path build\timp.exe))
+
+# Bundle the MinGW runtime DLLs timp.exe loads (libraylib.dll, glfw3.dll,
+# libwinpthread-1.dll, and anything they pull in). We walk the PE imports with
+# objdump and copy only DLLs that live in the MinGW bin dir — Windows system DLLs
+# (kernel32, user32, ...) resolve from System32 on every machine and are skipped.
+$mingwBin = Split-Path $gcc -Parent
+$objdump  = Join-Path $mingwBin 'objdump.exe'
+if (-not (Test-Path $objdump)) { $objdump = (Get-Command objdump -ErrorAction SilentlyContinue).Source }
+
+function Copy-RuntimeDlls {
+    param([string]$Binary, [string]$DllDir, [string]$DestDir, [string]$Objdump, [hashtable]$Seen)
+    $deps = & $Objdump -p $Binary 2>$null |
+            Select-String -Pattern 'DLL Name:\s*(\S+)' |
+            ForEach-Object { $_.Matches[0].Groups[1].Value }
+    foreach ($dll in $deps) {
+        $key = $dll.ToLowerInvariant()
+        if ($Seen.ContainsKey($key)) { continue }
+        $Seen[$key] = $true
+        $candidate = Join-Path $DllDir $dll
+        if (Test-Path $candidate) {
+            Copy-Item $candidate $DestDir -Force
+            Write-Output "bundling $dll"
+            Copy-RuntimeDlls -Binary $candidate -DllDir $DllDir -DestDir $DestDir -Objdump $Objdump -Seen $Seen
+        }
+    }
+}
+
+if ($objdump) {
+    Copy-RuntimeDlls -Binary 'build\timp.exe' -DllDir $mingwBin -DestDir 'build' -Objdump $objdump -Seen @{}
+} else {
+    Write-Warning 'objdump not found - cannot auto-bundle runtime DLLs; timp.exe will fail on machines without MSYS2.'
+}
