@@ -27,7 +27,7 @@
 #define PAD  20
 #define TBH  40         // top bar height
 #define ARTS (WW - 2 * PAD)
-#define TIMP_VERSION "0.7.3"   // keep in sync with forge.toml
+#define TIMP_VERSION "0.7.4"   // keep in sync with forge.toml
 
 // ---------- palette ----------
 static const Color BG0 = { 24, 21, 17, 255 };
@@ -259,7 +259,8 @@ int main(int argc, char **argv) {
     SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_UNDECORATED);
     SetTraceLogLevel(LOG_WARNING);
     InitWindow(WW, WH, "Timp");
-    SetTargetFPS(60);
+    int refresh = GetMonitorRefreshRate(GetCurrentMonitor());
+    SetTargetFPS(refresh > 0 ? refresh : 60);
     SetExitKey(0);
     os_round_window(GetWindowHandle(), WW, WH, 16);
 
