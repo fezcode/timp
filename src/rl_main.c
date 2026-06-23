@@ -42,7 +42,7 @@ static Texture2D g_cover;
 static bool      g_has_cover = false;
 static Color     g_accent = { 201, 164, 90, 255 };
 static char      g_title[256] = "Drop a track to begin";
-static char      g_meta[128]  = "";
+static char      g_meta[256]  = "";   // sized to match Tags.artist (avoids snprintf truncation)
 static char      g_fmt[32]    = "";
 static Playlist  g_pl;
 static bool      g_show_queue = false;
@@ -73,8 +73,10 @@ static float  g_q_press_y = 0;
 
 // ---------- helpers ----------
 static float approach(float c, float t, float dt) { return c + (t - c) * (1.0f - expf(-dt * 16.0f)); }
+static int   clampi(int v, int lo, int hi)   { return v < lo ? lo : (v > hi ? hi : v); }
+static float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
 static Color clerp(Color a, Color b, float t) {
-    if (t < 0) t = 0; if (t > 1) t = 1;
+    t = clampf(t, 0.0f, 1.0f);
     return (Color){ (unsigned char)(a.r + (b.r - a.r) * t), (unsigned char)(a.g + (b.g - a.g) * t),
                     (unsigned char)(a.b + (b.b - a.b) * t), (unsigned char)(a.a + (b.a - a.a) * t) };
 }
@@ -132,7 +134,8 @@ static void make_cover(const char *path) {
 static bool dir_cover_rgba(const char *path, unsigned char **rgba, int *w, int *h) {
     char dir[700]; snprintf(dir, sizeof(dir), "%s", path);
     char *a = strrchr(dir, '/'), *b = strrchr(dir, '\\'), *s = (b > a) ? b : a;
-    if (!s) return false; *s = 0;
+    if (!s) return false;
+    *s = 0;
     static const char *pref[] = { "cover.jpg", "cover.png", "folder.jpg", "folder.png", "front.jpg",
                                   "front.png", "Cover.jpg", "Folder.jpg", "AlbumArt.jpg", "album.jpg", NULL };
     char cand[800];
@@ -503,7 +506,7 @@ int main(int argc, char **argv) {
         if (g_q_press >= 0 && g_q_drag < 0 && fabsf(mp.y - g_q_press_y) > 6) g_q_drag = g_q_press;
         if (g_q_drag >= 0) {
             int t = g_queue_scroll + ((int)mp.y - qTop) / qRowH;
-            if (t < 0) t = 0; if (t >= qcount) t = qcount - 1;
+            t = clampi(t, 0, qcount - 1);
             g_q_target = t;
         }
         if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
@@ -531,11 +534,11 @@ int main(int argc, char **argv) {
         if (wheel != 0) {
             if (g_show_queue) {
                 g_queue_scroll -= (int)wheel; int maxs = qcount - qVisible; if (maxs < 0) maxs = 0;
-                if (g_queue_scroll < 0) g_queue_scroll = 0; if (g_queue_scroll > maxs) g_queue_scroll = maxs;
+                g_queue_scroll = clampi(g_queue_scroll, 0, maxs);
             } else if (g_show_lyrics && !g_lyrics.synced) {
                 g_lyrics_scroll -= (int)(wheel * 28);
                 int maxs = g_lyrics.count * 24 - (ARTS - 80); if (maxs < 0) maxs = 0;
-                if (g_lyrics_scroll < 0) g_lyrics_scroll = 0; if (g_lyrics_scroll > maxs) g_lyrics_scroll = maxs;
+                g_lyrics_scroll = clampi(g_lyrics_scroll, 0, maxs);
             } else if (g_audio) audio_set_volume(g_audio, audio_get_volume(g_audio) + wheel * 0.05f);
         }
         if (IsKeyPressed(KEY_SPACE) && loaded) { if (playing) audio_pause(g_audio); else audio_play(g_audio); }
@@ -597,7 +600,7 @@ int main(int argc, char **argv) {
                 if (isCur)        DrawRectangleRounded(row, 0.35f, 6, alpha(g_accent, 32));
                 else if (isDrag)  DrawRectangleRounded(row, 0.35f, 6, (Color){ 255, 255, 255, 22 });
                 else if (hov)     DrawRectangleRounded(row, 0.35f, 6, (Color){ 255, 255, 255, 12 });
-                char num[8]; snprintf(num, sizeof(num), "%d", idx + 1);
+                char num[16]; snprintf(num, sizeof(num), "%d", idx + 1);
                 DrawTextEx(fSmall, num, (Vector2){ artR.x + 16, ry + 9 }, 13, 1.0f, isCur ? g_accent : alpha(MUT, 140));
                 char nm[256]; snprintf(nm, sizeof(nm), "%s", basename_of(g_pl.paths[idx]));
                 char *d = strrchr(nm, '.'); if (d) *d = 0;
