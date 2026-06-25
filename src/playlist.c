@@ -1,38 +1,55 @@
 #include "playlist.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-// ---------- shuffle history ----------
-// Forget the trail (keeps the allocation for reuse). Called whenever the trail
-// would become meaningless: a manual jump, a shuffle toggle, or a structural
-// edit that shifts indices.
-static void hist_reset(Playlist* p) {
-    p->hist_count = 0;
-    p->hist_pos = -1;
+// ---------- shuffle order ----------
+static void order_ensure_cap(Playlist* p, int need) {
+    if (p->order_cap >= need) return;
+    int cap = p->order_cap ? p->order_cap : 16;
+    while (cap < need) cap *= 2;
+    p->order = (int*)realloc(p->order, sizeof(int) * cap);
+    p->order_cap = cap;
 }
 
-// Append a freshly-visited index and point the cursor at it.
-static void hist_append(Playlist* p, int idx) {
-    if (p->hist_count == p->hist_cap) {
-        p->hist_cap = p->hist_cap ? p->hist_cap * 2 : 16;
-        p->history = (int*)realloc(p->history, sizeof(int) * p->hist_cap);
+// How a stored index moves when paths[from] is relocated to slot `to`. Mirrors the
+// index fixup playlist_move applies, so the shuffle order keeps pointing at the
+// same songs after a drag-reorder.
+static int remap_after_move(int v, int from, int to) {
+    if (v == from)                 return to;
+    if (from < v && v <= to)       return v - 1;
+    if (to   <= v && v <  from)    return v + 1;
+    return v;
+}
+
+// Point the cursor at whichever slot currently holds the playing track, so
+// playback continues from there instead of restarting the shuffle walk.
+static void order_point_at_current(Playlist* p) {
+    p->order_pos = (p->order_count > 0) ? 0 : -1;
+    for (int i = 0; i < p->order_count; i++)
+        if (p->order[i] == p->index) { p->order_pos = i; break; }
+}
+
+// Build a fresh random permutation of [0..count). The current track is left
+// wherever it lands and the cursor points at it (so the song keeps playing).
+static void order_build(Playlist* p) {
+    if (p->count <= 0) { p->order_count = 0; p->order_pos = -1; return; }
+    order_ensure_cap(p, p->count);
+    for (int i = 0; i < p->count; i++) p->order[i] = i;
+    for (int i = p->count - 1; i > 0; i--) {       // Fisher-Yates
+        int j = rand() % (i + 1);
+        int t = p->order[i]; p->order[i] = p->order[j]; p->order[j] = t;
     }
-    p->history[p->hist_count++] = idx;
-    p->hist_pos = p->hist_count - 1;
-}
-
-// On the first shuffle move from a fresh anchor, seed the trail with the track
-// we're leaving so prev can return to it.
-static void hist_ensure_seed(Playlist* p) {
-    if (p->hist_count == 0 && p->index >= 0) hist_append(p, p->index);
+    p->order_count = p->count;
+    order_point_at_current(p);
 }
 
 void playlist_init(Playlist* p) {
     memset(p, 0, sizeof(*p));
     p->index = -1;
-    p->hist_pos = -1;
+    p->order_pos = -1;
     static int seeded = 0;
     if (!seeded) { srand((unsigned)time(NULL)); seeded = 1; }
 }
@@ -41,17 +58,16 @@ void playlist_clear(Playlist* p) {
     for (int i = 0; i < p->count; i++) free(p->paths[i]);
     p->count = 0;
     p->index = -1;
-    hist_reset(p);
+    p->order_count = 0;
+    p->order_pos = -1;
+    p->name[0] = 0;
+    p->dirty = false;
 }
 
 void playlist_free(Playlist* p) {
     playlist_clear(p);
-    free(p->paths);
-    p->paths = NULL;
-    p->cap = 0;
-    free(p->history);
-    p->history = NULL;
-    p->hist_cap = 0;
+    free(p->paths);  p->paths = NULL;  p->cap = 0;
+    free(p->order);  p->order = NULL;  p->order_cap = 0;
 }
 
 static char* dupstr(const char* s) {
@@ -69,6 +85,12 @@ void playlist_add(Playlist* p, const char* path) {
     }
     p->paths[p->count++] = dupstr(path);
     if (p->index < 0) p->index = 0;
+    if (p->shuffle) {                     // append the new track to the tail of the order
+        order_ensure_cap(p, p->order_count + 1);
+        p->order[p->order_count++] = p->count - 1;
+        if (p->order_pos < 0) p->order_pos = 0;
+    }
+    p->dirty = true;
 }
 
 bool playlist_remove(Playlist* p, int idx) {
@@ -77,14 +99,22 @@ bool playlist_remove(Playlist* p, int idx) {
     free(p->paths[idx]);
     for (int i = idx; i < p->count - 1; i++) p->paths[i] = p->paths[i+1];
     p->count--;
-    if (p->count == 0) {
-        p->index = -1;
-    } else if (p->index >= p->count) {
-        p->index = p->count - 1;
-    } else if (p->index > idx) {
-        p->index--;
+    if (p->count == 0)              p->index = -1;
+    else if (p->index >= p->count)  p->index = p->count - 1;
+    else if (p->index > idx)        p->index--;
+
+    if (p->shuffle) {                     // drop idx and renumber the entries above it
+        int w = 0;
+        for (int r = 0; r < p->order_count; r++) {
+            int v = p->order[r];
+            if (v == idx) continue;
+            if (v > idx) v--;
+            p->order[w++] = v;
+        }
+        p->order_count = w;
+        order_point_at_current(p);
     }
-    hist_reset(p);   // indices shifted — the shuffle trail is no longer valid
+    p->dirty = true;
     return was_current;
 }
 
@@ -95,20 +125,17 @@ void playlist_move(Playlist* p, int from, int to) {
     if (from == to) return;
 
     char* moved = p->paths[from];
-    if (from < to) {
-        for (int i = from; i < to; i++) p->paths[i] = p->paths[i + 1];
-    } else {
-        for (int i = from; i > to; i--) p->paths[i] = p->paths[i - 1];
-    }
+    if (from < to) for (int i = from; i < to; i++) p->paths[i] = p->paths[i + 1];
+    else           for (int i = from; i > to; i--) p->paths[i] = p->paths[i - 1];
     p->paths[to] = moved;
 
     // Keep the current track's identity stable across the reorder.
-    int cur = p->index;
-    if (cur == from)            cur = to;
-    else if (from < cur && cur <= to) cur--;
-    else if (to <= cur && cur < from) cur++;
-    p->index = cur;
-    hist_reset(p);   // indices shifted — the shuffle trail is no longer valid
+    p->index = remap_after_move(p->index, from, to);
+    if (p->shuffle) {                     // renumber the order; the cursor slot is unchanged
+        for (int i = 0; i < p->order_count; i++)
+            p->order[i] = remap_after_move(p->order[i], from, to);
+    }
+    p->dirty = true;
 }
 
 const char* playlist_current(const Playlist* p) {
@@ -118,76 +145,79 @@ const char* playlist_current(const Playlist* p) {
 
 bool playlist_has_next(const Playlist* p) {
     if (p->count == 0) return false;
-    if (p->shuffle && p->count > 1) return true;
+    if (p->shuffle && p->order_count > 0) {
+        if (p->order_pos + 1 < p->order_count) return true;
+        return p->loop;
+    }
     if (p->index + 1 < p->count) return true;
-    return p->loop && p->count > 0;
+    return p->loop;
 }
 
 bool playlist_has_prev(const Playlist* p) {
     if (p->count == 0) return false;
-    // In shuffle, prev only means "go back through what we've already played".
-    if (p->shuffle && p->count > 1) return p->hist_pos > 0;
+    if (p->shuffle && p->order_count > 0) {
+        if (p->order_pos > 0) return true;
+        return p->loop;
+    }
     if (p->index > 0) return true;
-    return p->loop && p->count > 0;
+    return p->loop;
 }
 
 const char* playlist_next(Playlist* p) {
     if (p->count == 0) return NULL;
-    if (p->shuffle && p->count > 1) {
-        hist_ensure_seed(p);
-        // If we'd previously stepped back, next replays the same forward trail
-        // before generating anything new.
-        if (p->hist_pos + 1 < p->hist_count && p->history[p->hist_pos + 1] < p->count) {
-            p->index = p->history[++p->hist_pos];
-        } else {
-            int next;
-            do { next = rand() % p->count; } while (next == p->index);
-            p->index = next;
-            hist_append(p, next);
-        }
+    if (p->shuffle && p->order_count > 0) {
+        if (p->order_pos + 1 < p->order_count) p->index = p->order[++p->order_pos];
+        else if (p->loop)                      { p->order_pos = 0; p->index = p->order[0]; }
+        else return NULL;
     } else if (p->index + 1 < p->count) {
         p->index++;
     } else if (p->loop) {
         p->index = 0;
-    } else {
-        return NULL;
-    }
+    } else return NULL;
     return p->paths[p->index];
 }
 
 const char* playlist_prev(Playlist* p) {
     if (p->count == 0) return NULL;
-    if (p->shuffle && p->count > 1) {
-        // Walk back up the play-history instead of re-randomizing.
-        if (p->hist_pos > 0 && p->history[p->hist_pos - 1] < p->count) {
-            p->index = p->history[--p->hist_pos];
-        } else {
-            return NULL;   // nothing earlier in the trail
-        }
+    if (p->shuffle && p->order_count > 0) {
+        if (p->order_pos > 0) p->index = p->order[--p->order_pos];
+        else if (p->loop)     { p->order_pos = p->order_count - 1; p->index = p->order[p->order_pos]; }
+        else return NULL;
     } else if (p->index > 0) {
         p->index--;
     } else if (p->loop) {
         p->index = p->count - 1;
-    } else {
-        return NULL;
-    }
+    } else return NULL;
     return p->paths[p->index];
 }
 
 void playlist_set_index(Playlist* p, int i) {
-    if (i >= 0 && i < p->count) {
-        p->index = i;
-        hist_reset(p);   // a manual jump starts a fresh shuffle trail from here
-    }
+    if (i < 0 || i >= p->count) return;
+    p->index = i;
+    // A manual jump just repositions the cursor inside the existing shuffle order.
+    if (p->shuffle && p->order_count > 0) order_point_at_current(p);
 }
 
 int playlist_count(const Playlist* p) { return p->count; }
 int playlist_index(const Playlist* p) { return p->index; }
 
 void playlist_set_shuffle(Playlist* p, bool on) {
-    if (p->shuffle != on) hist_reset(p);   // start a fresh trail from the current track
+    if (p->shuffle == on) return;
     p->shuffle = on;
+    if (on) order_build(p);
+    else { p->order_count = 0; p->order_pos = -1; }
+}
+void playlist_reshuffle(Playlist* p) {
+    if (p->shuffle) order_build(p);
 }
 void playlist_set_loop(Playlist* p, bool on) { p->loop = on; }
 bool playlist_shuffle(const Playlist* p) { return p->shuffle; }
 bool playlist_loop(const Playlist* p) { return p->loop; }
+
+const char* playlist_name(const Playlist* p) { return p->name; }
+void playlist_set_name(Playlist* p, const char* name) {
+    if (!name) { p->name[0] = 0; return; }
+    snprintf(p->name, sizeof(p->name), "%s", name);
+}
+bool playlist_dirty(const Playlist* p) { return p->dirty; }
+void playlist_mark_clean(Playlist* p) { p->dirty = false; }

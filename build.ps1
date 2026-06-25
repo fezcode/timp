@@ -28,7 +28,7 @@ $flags   = @('-O2','-Wall','-Wextra','-Wno-unused-parameter','-std=c11','-Isrc')
 $winlibs = '-mwindows','-lopengl32','-lgdi32','-lwinmm','-lcomdlg32','-lole32','-luser32','-ldwmapi','-lwinhttp','-lshell32','-lm'
 
 New-Item -ItemType Directory -Force -Path build | Out-Null
-$srcs = 'rl_main','audio','art','osdialog','tags','lyrics','rlconfig','mediakeys','singleinst','fft','eq','playlist','vendor_ma'
+$srcs = 'rl_main','audio','art','osdialog','tags','lyrics','rlconfig','mediakeys','singleinst','fft','eq','playlist','playlistio','vendor_ma'
 
 # Incremental: any .h change invalidates every .o (avoids stale-struct corruption).
 $newestHeader = (Get-ChildItem src\*.h | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime

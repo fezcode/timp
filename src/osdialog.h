@@ -21,5 +21,9 @@ char **os_args_utf8(int argc, char **argv, int *out_count);
 // GetWindowHandle() pointer. No-op off Windows.
 void os_focus_window(void *hwnd);
 
+// Open the given folder (UTF-8 path) in the system file manager (Explorer).
+// No-op off Windows.
+void os_reveal_dir(const char *utf8_path);
+
 #endif
 

@@ -85,6 +85,16 @@ void os_focus_window(void *hwnd) {
     BringWindowToTop(h);
 }
 
+void os_reveal_dir(const char *utf8_path) {
+    int n = MultiByteToWideChar(CP_UTF8, 0, utf8_path, -1, NULL, 0);
+    if (n <= 0) return;
+    wchar_t *w = (wchar_t *)malloc(sizeof(wchar_t) * n);
+    if (!w) return;
+    MultiByteToWideChar(CP_UTF8, 0, utf8_path, -1, w, n);
+    ShellExecuteW(NULL, L"open", w, NULL, NULL, SW_SHOWNORMAL);
+    free(w);
+}
+
 #else
 int os_open_audio_files(void (*on_file)(const char *, void *), void *ud) {
     (void)on_file; (void)ud;
@@ -98,4 +108,5 @@ char **os_args_utf8(int argc, char **argv, int *out_count) {
     return argv;
 }
 void os_focus_window(void *hwnd) { (void)hwnd; }
+void os_reveal_dir(const char *utf8_path) { (void)utf8_path; }
 #endif

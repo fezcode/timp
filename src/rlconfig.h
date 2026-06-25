@@ -11,10 +11,15 @@ typedef struct {
     float eq_gains[10];
     int   win_x, win_y;
     bool  has_win_pos;
+    int   playlist_side;   // 0 = right, 1 = left
 } RlConfig;
 
 void rlconfig_defaults(RlConfig *c);
 bool rlconfig_load(RlConfig *c);
 bool rlconfig_save(const RlConfig *c);
+
+// Absolute path of the per-user data folder (Windows: %APPDATA%\Timp), creating
+// it if needed. config.ini and the Playlists\ folder both live here.
+void rlconfig_data_dir(char *out, int cap);
 
 #endif

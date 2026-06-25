@@ -5,8 +5,8 @@ A small, native, album-art-forward music player written in C with
 
 Borderless single window with a Hi-Fi look: large cover art, anti-aliased
 typography, an accent color sampled from the artwork, a live spectrum, a
-10-band EQ, a drag-reorderable queue, and synced lyrics. Audio is decoded by
-[miniaudio](https://miniaud.io/) (MP3 / FLAC / OGG / WAV, Unicode paths).
+10-band EQ, a slide-out saveable playlist drawer, and synced lyrics. Audio is
+decoded by [miniaudio](https://miniaud.io/) (MP3 / FLAC / OGG / WAV, Unicode paths).
 No installer, no runtime, no telemetry — raylib is linked statically, so the
 whole app is a single `timp.exe`.
 
@@ -27,18 +27,25 @@ whole app is a single `timp.exe`.
   a background thread
 - **Visualizers** — click the album art to cycle cover → spectrum bars →
   waveform; a mini spectrum sits under the title
-- **Queue** — drag files or a folder in (appends); drag rows to reorder,
-  double-click to play, hover for a remove `×`, or **Clear** the whole queue
+- **Playlist drawer** — the queue lives in a panel that **slides out the left or
+  right side** (your choice in Settings), extending the window beside the player.
+  Drag files or a folder in (appends), drag rows to reorder, double-click to play,
+  hover for a remove `×`, or clear it
+- **Saved playlists** — name and **save** the queue as a standard `.m3u8`
+  (UTF-8, absolute paths — so it opens in other players and survives across
+  drives), **reopen** it from an in-app library, and overwrite with a confirm;
+  stored in `%APPDATA%\Timp\Playlists\`
 - **10-band equalizer** — 60 / 170 / 310 / 600 Hz / 1 / 3 / 6 / 12 / 14 / 16 kHz,
   with `ON` / `FLAT`
 - **Transport** — play/pause, prev/next, **drag-to-scrub** seeking, volume,
-  shuffle, and 3-state repeat (off / one / all)
+  **fixed-order shuffle** (the whole list is shuffled once; next/prev follow that
+  order), and 3-state repeat (off / one / all)
 - **Tags** — title / artist / album read from ID3v2 and Vorbis comments
   (UTF-8 / UTF-16, full Latin + Turkish glyph coverage)
 - **System integration** — system-wide media keys, always-on-top, and a
   procedurally-drawn app/taskbar icon
-- **Persistent settings** — volume, EQ, always-on-top, and window position are
-  saved to `%APPDATA%\Timp\config.ini`
+- **Persistent settings** — volume, EQ, always-on-top, playlist side, and window
+  position are saved to `%APPDATA%\Timp\config.ini`
 - **Polished window** — borderless with anti-aliased, rounded corners (Win11
   DWM) and no console window
 - **Tiny** — pure C11 + raylib + miniaudio, statically linked into one exe
@@ -91,10 +98,11 @@ The build tooling is three small scripts:
 - **Drop files or a folder** onto the window to enqueue them, or click **`+`**
   (top-left) for the native open dialog.
 - **Click the album art** to cycle through the cover and the visualizers.
-- Top bar: **`+`** open · **`≡`** queue · **sliders** EQ · **gear** settings ·
-  **`♪`** lyrics.
-- **Queue** — double-click a row to play, drag rows to reorder, hover for the
-  `×`, or **Clear** to empty it.
+- Top bar: **`+`** open · **`≡`** playlist drawer · **sliders** EQ · **gear**
+  settings · **`♪`** lyrics.
+- **Playlist drawer** — **`≡`** or `Q` slides it out beside the player.
+  Double-click a row to play, drag rows to reorder, hover for the `×`, **Save**
+  to store the list as a named playlist, or **Open** to load a saved one.
 - **Seek** by dragging the progress bar; **volume** via its slider, the mouse
   wheel, or `↑` / `↓`.
 
@@ -129,10 +137,14 @@ For the playing track, Timp looks for lyrics in this order:
 volume = 0.700
 always_on_top = 0
 eq_enabled = 0
-eq0 = 0.00      # … eq9 — per-band gains
+eq0 = 0.00          # … eq9 — per-band gains
+playlist_side = 0   # 0 = drawer on the right, 1 = on the left
 win_x = ...
 win_y = ...
 ```
+
+Saved playlists are standard `.m3u8` files in `%APPDATA%\Timp\Playlists\`
+(use **Settings → Open folder** to reveal it).
 
 ## Project layout
 
@@ -147,7 +159,8 @@ src/
   rlconfig.c     persistent %APPDATA% settings
   mediakeys.c    system-wide media-key hotkeys
   eq.c / fft.c   10-band EQ + spectrum FFT
-  playlist.c     queue / index management
+  playlist.c     queue / index + fixed-order shuffle
+  playlistio.c   save / load / list .m3u8 playlists
   vendor_ma.c    miniaudio implementation unit
 vendor/          miniaudio.h, stb_image.h (fetched)
 assets/timp.ico  embedded Windows executable icon
