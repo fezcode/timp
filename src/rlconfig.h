@@ -12,6 +12,7 @@ typedef struct {
     int   win_x, win_y;
     bool  has_win_pos;
     int   playlist_side;   // 0 = right, 1 = left
+    int   prev_mode;       // 0 = smart (restart if >5s, else prev) · 1 = direct (always prev)
 } RlConfig;
 
 void rlconfig_defaults(RlConfig *c);

@@ -1,6 +1,6 @@
 [app]
 name    = "Timp"
-version = "0.8.0"
+version = "0.8.1"
 id      = "io.timp.timp"
 
 [meta]
@@ -21,8 +21,8 @@ keep = []
 
 [[steps]]
 type  = "welcome"
-title = "Timp 0.8.0"
-body  = "This wizard will install Timp 0.8.0 on your computer.\n\nTimp is a small, native, album-art music player.\n\nClick Next to continue."
+title = "Timp 0.8.1"
+body  = "This wizard will install Timp 0.8.1 on your computer.\n\nTimp is a small, native, album-art music player.\n\nClick Next to continue."
 
 [[steps]]
 type  = "license"
@@ -33,7 +33,7 @@ file  = "LICENSE.txt"
 [[steps]]
 type  = "folder"
 title = "Select Folder"
-body  = "Choose where to install Timp 0.8.0."
+body  = "Choose where to install Timp 0.8.1."
 
 [[steps]]
 type  = "shortcuts"
@@ -90,4 +90,4 @@ data  = "${INSTALLDIR}"
 hive  = "HKLM"
 key   = "Software\\Timp\\Timp"
 value = "Version"
-data  = "0.8.0"
+data  = "0.8.1"

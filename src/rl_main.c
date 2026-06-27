@@ -30,7 +30,7 @@
 #define ARTS (WW - 2 * PAD)
 #define DRAWER_W 320           // playlist drawer width (logical px); window grows by this
 #define WMAXW (WW + DRAWER_W)  // render target width covers player + drawer
-#define TIMP_VERSION "0.8.0"   // keep in sync with forge.toml
+#define TIMP_VERSION "0.8.1"   // keep in sync with forge.toml
 
 // ---------- palette ----------
 static const Color BG0 = { 24, 21, 17, 255 };
@@ -59,6 +59,7 @@ static int       g_lyrics_scroll = 0;
 static Lyrics    g_lyrics;
 static float     g_premute = 0.7f;
 static int       g_repeat = 0;          // 0 off · 1 one · 2 all
+static int       g_prev_mode = 0;       // 0 smart (>5s restarts, else prev) · 1 direct (always prev)
 static int       g_queue_scroll = 0;
 static int       g_art_mode = 0;        // 0 cover · 1 bars · 2 wave
 
@@ -230,6 +231,16 @@ static void load_file(const char *path) {
         }
     } else snprintf(g_title, sizeof(g_title), "Can't open file");
 }
+// Prev action shared by the on-screen button and the system media key.
+// Smart mode (Spotify-like): once past the first 5s, prev restarts the current
+// song; only within the first 5s does it step to the previous track.
+// Direct mode: always step to the previous track.
+static void do_prev(void) {
+    bool loaded = g_audio && audio_is_loaded(g_audio);
+    if (g_prev_mode == 0 && loaded && audio_position_seconds(g_audio) > 5.0) { audio_seek_seconds(g_audio, 0); return; }
+    if (playlist_has_prev(&g_pl)) load_file(playlist_prev(&g_pl));
+    else if (loaded) audio_seek_seconds(g_audio, 0);
+}
 static void queue_add_cb(const char *path, void *ud) { (void)ud; playlist_add(&g_pl, path); }
 static void open_dialog(void) {
     bool wasLoaded = g_audio && audio_is_loaded(g_audio);
@@ -352,6 +363,7 @@ int main(int argc, char **argv) {
     RlConfig cfg; rlconfig_load(&cfg);
     bool g_aot = cfg.always_on_top;
     g_side = (cfg.playlist_side == 1) ? 1 : 0;
+    g_prev_mode = (cfg.prev_mode == 1) ? 1 : 0;
     if (g_audio) {
         audio_set_volume(g_audio, cfg.volume);
         Eq *e0 = audio_get_eq(g_audio);
@@ -403,7 +415,7 @@ int main(int argc, char **argv) {
         switch (mediakeys_poll()) {
             case MK_PLAYPAUSE: if (loaded) { if (playing) audio_pause(g_audio); else audio_play(g_audio); } break;
             case MK_STOP:      if (loaded) audio_stop(g_audio); break;
-            case MK_PREV:      if (playlist_has_prev(&g_pl)) load_file(playlist_prev(&g_pl)); else if (loaded) audio_seek_seconds(g_audio, 0); break;
+            case MK_PREV:      do_prev(); break;
             case MK_NEXT:      if (playlist_has_next(&g_pl)) load_file(playlist_next(&g_pl)); break;
             default: break;
         }
@@ -436,8 +448,9 @@ int main(int argc, char **argv) {
         Vector2 rawmp = GetMousePosition();
         Vector2 mp  = { rawmp.x - playerShift, rawmp.y };   // player-local mouse (rects live in [0,WW])
         Vector2 dmp = { rawmp.x - drawerShift, rawmp.y };   // drawer-local mouse (rects live in [0,DRAWER_W])
-        // window drag from the empty part of the top bar
+        // window drag from the empty part of the top bar (player, or the open drawer's top strip)
         if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && mp.y < TBH && mp.x > 74 && mp.x < WW - 66) { dragging = true; dragGrab = mp; }
+        else if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && dw > 0 && dmp.y < TBH && dmp.x > 0 && dmp.x < DRAWER_W) { dragging = true; dragGrab = mp; }
         if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) dragging = false;
         if (dragging && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
             Vector2 wp = GetWindowPosition();
@@ -521,15 +534,16 @@ int main(int argc, char **argv) {
             else if (CheckCollisionPointRec(mp, setR)) { g_show_settings = !g_show_settings; if (g_show_settings) { g_show_eq = g_show_lyrics = false; } }
             else if (CheckCollisionPointRec(mp, lyrR)) { g_show_lyrics = !g_show_lyrics; if (g_show_lyrics) { g_show_eq = g_show_settings = false; } }
             else if (g_show_settings && CheckCollisionPointRec(mp, artR)) {
-                int ry0 = (int)artR.y + 54, rowH = 40;
+                int ry0 = (int)artR.y + 50, rowH = 35;
                 int row = ((int)mp.y - ry0) / rowH;
                 Rectangle foldBtn = { artR.x + 20, artR.y + 308, 130, 26 };
-                if ((int)mp.y >= ry0 && row >= 0 && row < 5) {
+                if ((int)mp.y >= ry0 && row >= 0 && row < 6) {
                     if (row == 0) { g_aot = !g_aot; if (g_aot) SetWindowState(FLAG_WINDOW_TOPMOST); else ClearWindowState(FLAG_WINDOW_TOPMOST); }
                     else if (row == 1) playlist_set_shuffle(&g_pl, !playlist_shuffle(&g_pl));
                     else if (row == 2) { g_repeat = (g_repeat + 1) % 3; playlist_set_loop(&g_pl, g_repeat == 2); }
                     else if (row == 3) g_side ^= 1;                          // playlist drawer side
-                    else if (row == 4 && g_audio) {
+                    else if (row == 4) g_prev_mode ^= 1;                     // prev button behaviour
+                    else if (row == 5 && g_audio) {
                         if (audio_get_volume(g_audio) > 0.001f) { g_premute = audio_get_volume(g_audio); audio_set_volume(g_audio, 0); }
                         else audio_set_volume(g_audio, g_premute);
                     }
@@ -551,7 +565,7 @@ int main(int argc, char **argv) {
             }
             else if (!g_show_eq && !g_show_settings && !g_show_lyrics && CheckCollisionPointRec(mp, artR)) g_art_mode = (g_art_mode + 1) % 3;
             else if (loaded && CheckCollisionPointRec(mp, playR)) { if (playing) audio_pause(g_audio); else audio_play(g_audio); }
-            else if (CheckCollisionPointRec(mp, prevR)) { if (playlist_has_prev(&g_pl)) load_file(playlist_prev(&g_pl)); else if (loaded) audio_seek_seconds(g_audio, 0); }
+            else if (CheckCollisionPointRec(mp, prevR)) do_prev();
             else if (CheckCollisionPointRec(mp, nextR)) { if (playlist_has_next(&g_pl)) load_file(playlist_next(&g_pl)); }
             else if (CheckCollisionPointRec(mp, shufR)) playlist_set_shuffle(&g_pl, !playlist_shuffle(&g_pl));
             else if (CheckCollisionPointRec(mp, repR)) { g_repeat = (g_repeat + 1) % 3; playlist_set_loop(&g_pl, g_repeat == 2); }
@@ -899,14 +913,14 @@ int main(int argc, char **argv) {
         } else if (g_show_settings) {
             rrBox(artR, 0.05f, CARDBG, (Color){ 255, 255, 255, 14 });
             DrawTextEx(fEye, "SETTINGS", (Vector2){ artR.x + 16, artR.y + 16 }, 12, 3.0f, alpha(g_accent, 205));
-            const char *labels[5] = { "Always on top", "Shuffle", "Repeat", "Playlist side", "Mute" };
-            bool st[5] = { g_aot, playlist_shuffle(&g_pl), playlist_loop(&g_pl), false, g_audio ? audio_get_volume(g_audio) <= 0.001f : false };
-            int ry0 = (int)artR.y + 54, rowH = 40;
-            for (int i = 0; i < 5; i++) {
+            const char *labels[6] = { "Always on top", "Shuffle", "Repeat", "Playlist side", "Prev button", "Mute" };
+            bool st[6] = { g_aot, playlist_shuffle(&g_pl), playlist_loop(&g_pl), false, false, g_audio ? audio_get_volume(g_audio) <= 0.001f : false };
+            int ry0 = (int)artR.y + 50, rowH = 35;
+            for (int i = 0; i < 6; i++) {
                 float ry = (float)(ry0 + i * rowH);
                 bool hov = CheckCollisionPointRec(mp, (Rectangle){ artR.x, ry, artR.width, (float)rowH });
                 if (hov) DrawRectangleRounded((Rectangle){ artR.x + 6, ry, artR.width - 12, (float)rowH - 8 }, 0.3f, 6, (Color){ 255, 255, 255, 10 });
-                DrawTextEx(fMeta, labels[i], (Vector2){ artR.x + 20, ry + 10 }, 16, 0.3f, TXT);
+                DrawTextEx(fMeta, labels[i], (Vector2){ artR.x + 20, ry + 8 }, 16, 0.3f, TXT);
                 float tx = artR.x + artR.width - 66, ty = ry + (rowH - 24) / 2.0f;
                 if (i == 2) {  // repeat: 3-state pill (Off / One / All)
                     const char *rm[3] = { "Off", "One", "All" };
@@ -919,6 +933,12 @@ int main(int argc, char **argv) {
                     rrBox((Rectangle){ tx, ty, 46, 24 }, 0.5f, alpha(g_accent, 55), g_accent);
                     Vector2 mw = MeasureTextEx(fSmall, sd, 13, 0.3f);
                     DrawTextEx(fSmall, sd, (Vector2){ tx + (46 - mw.x) / 2, ty + 4 }, 13, 0.3f, g_accent);
+                } else if (i == 4) {  // prev button: Smart / Direct pill
+                    const char *pm = (g_prev_mode == 0) ? "Smart" : "Direct";
+                    float pw = 56, px = artR.x + artR.width - 20 - pw;
+                    rrBox((Rectangle){ px, ty, pw, 24 }, 0.5f, alpha(g_accent, 55), g_accent);
+                    Vector2 mw = MeasureTextEx(fSmall, pm, 13, 0.3f);
+                    DrawTextEx(fSmall, pm, (Vector2){ px + (pw - mw.x) / 2, ty + 4 }, 13, 0.3f, g_accent);
                 } else {
                     rrFill((Rectangle){ tx, ty, 46, 24 }, 1, st[i] ? g_accent : TRK);
                     float kx = st[i] ? tx + 46 - 13 : tx + 13;
@@ -1116,6 +1136,7 @@ int main(int argc, char **argv) {
     }
     save.always_on_top = g_aot;
     save.playlist_side = g_side;
+    save.prev_mode = g_prev_mode;
     save.win_x = g_base_x; save.win_y = g_base_y; save.has_win_pos = true;   // closed-window anchor
     rlconfig_save(&save);
 

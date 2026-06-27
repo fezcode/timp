@@ -39,6 +39,7 @@ void rlconfig_defaults(RlConfig *c) {
     for (int i = 0; i < 10; i++) c->eq_gains[i] = 0.f;
     c->has_win_pos = false;
     c->playlist_side = 0;
+    c->prev_mode = 0;
 }
 
 bool rlconfig_load(RlConfig *c) {
@@ -62,6 +63,7 @@ bool rlconfig_load(RlConfig *c) {
             else if (!strcmp(key, "win_x")) { c->win_x = iv; c->has_win_pos = true; }
             else if (!strcmp(key, "win_y")) c->win_y = iv;
             else if (!strcmp(key, "playlist_side")) c->playlist_side = iv;
+            else if (!strcmp(key, "prev_mode")) c->prev_mode = iv;
         }
     }
     fclose(f);
@@ -78,6 +80,7 @@ bool rlconfig_save(const RlConfig *c) {
     fprintf(f, "eq_enabled=%d\n", c->eq_enabled ? 1 : 0);
     for (int i = 0; i < 10; i++) fprintf(f, "eq%d=%.2f\n", i, c->eq_gains[i]);
     fprintf(f, "playlist_side=%d\n", c->playlist_side);
+    fprintf(f, "prev_mode=%d\n", c->prev_mode);
     if (c->has_win_pos) { fprintf(f, "win_x=%d\n", c->win_x); fprintf(f, "win_y=%d\n", c->win_y); }
     fclose(f);
     return true;
