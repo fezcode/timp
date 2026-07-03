@@ -30,7 +30,7 @@
 #define ARTS (WW - 2 * PAD)
 #define DRAWER_W 320           // playlist drawer width (logical px); window grows by this
 #define WMAXW (WW + DRAWER_W)  // render target width covers player + drawer
-#define TIMP_VERSION "0.9.0"   // keep in sync with forge.toml
+#define TIMP_VERSION "0.10.0"  // keep in sync with forge.toml
 
 // ---------- palette ----------
 static const Color BG0 = { 24, 21, 17, 255 };
@@ -89,7 +89,14 @@ static float g_hv[HV_N];
 static double g_last_click_t = -1;
 static int    g_last_click_idx = -1;
 static int    g_q_press = -1, g_q_drag = -1, g_q_target = -1;
+static int    g_q_drag_view = 0;        // which tab the drag started in (0 playlist · 2 queue)
 static float  g_q_press_y = 0;
+
+// context menu (right-click on a drawer row)
+static bool    g_ctx_open = false;
+static int     g_ctx_view = 0;          // tab the menu belongs to (0 playlist · 2 queue)
+static int     g_ctx_target = -1;       // playlist index (tab 0) / queue pos (tab 2)
+static Vector2 g_ctx_at = { 0, 0 };     // drawer-local anchor (where the user clicked)
 
 // ---------- helpers ----------
 static float approach(float c, float t, float dt) { return c + (t - c) * (1.0f - expf(-dt * 16.0f)); }
@@ -348,6 +355,33 @@ static void draw_fit(Font f, const char *txt, Vector2 pos, float size, float sp,
     DrawTextEx(f, buf, pos, size, sp, c);
 }
 
+// ---------- row context menu ----------
+// Items for the open context menu. Returns the count; `en` marks clickable ones.
+static int ctx_menu_items(const char **items, bool *en) {
+    if (g_ctx_view == 0) {
+        items[0] = "Add to queue"; en[0] = true;
+        items[1] = "Remove";       en[1] = true;
+        return 2;
+    }
+    items[0] = "Remove from queue";
+    en[0] = (g_ctx_target != playlist_queue_pos(&g_pl));   // the playing entry stays
+    return 1;
+}
+#define CTX_ITEM_H 30
+static Rectangle ctx_menu_rect(Rectangle dCard) {
+    const char *items[2]; bool en[2];
+    int n = ctx_menu_items(items, en);
+    Rectangle r = { g_ctx_at.x, g_ctx_at.y, 170, (float)(n * CTX_ITEM_H + 10) };
+    if (r.x + r.width  > dCard.x + dCard.width  - 4) r.x = dCard.x + dCard.width  - 4 - r.width;
+    if (r.y + r.height > dCard.y + dCard.height - 4) r.y = dCard.y + dCard.height - 4 - r.height;
+    if (r.x < dCard.x + 4) r.x = dCard.x + 4;
+    if (r.y < dCard.y + 4) r.y = dCard.y + 4;
+    return r;
+}
+static Rectangle ctx_item_rect(Rectangle m, int i) {
+    return (Rectangle){ m.x + 5, m.y + 5 + i * CTX_ITEM_H, m.width - 10, CTX_ITEM_H - 2 };
+}
+
 // Search field for the drawer tabs: magnifier, text/placeholder, caret, clear ×.
 static void draw_search_box(Rectangle r, Vector2 dmp, int frame) {
     bool hov = CheckCollisionPointRec(dmp, r);
@@ -486,6 +520,11 @@ int main(int argc, char **argv) {
     if (getenv("TIMP_VIEW")) g_drawer_view = clampi(atoi(getenv("TIMP_VIEW")), 0, 2);   // 0 playlist · 2 queue (test/override)
     if (getenv("TIMP_SHUF")) playlist_set_shuffle(&g_pl, true);                         // (test/override)
     if (getenv("TIMP_FIND")) snprintf(g_search, sizeof(g_search), "%s", getenv("TIMP_FIND"));   // (test/override)
+    if (getenv("TIMP_CTX")) {                                                                   // (test/override) open the row context menu
+        g_ctx_open = true; g_ctx_view = (g_drawer_view == 2) ? 2 : 0;
+        g_ctx_target = atoi(getenv("TIMP_CTX"));
+        g_ctx_at = (Vector2){ 120, 300 };
+    }
     if (getenv("TIMP_SIDE")) g_side = atoi(getenv("TIMP_SIDE")) ? 1 : 0;   // 0 right · 1 left (test/override)
     if (getenv("TIMP_EQ")) g_show_eq = true;
     if (getenv("TIMP_SET")) g_show_settings = true;
@@ -635,8 +674,39 @@ int main(int argc, char **argv) {
         g_hv[HV_REP]   = approach(g_hv[HV_REP],   CheckCollisionPointRec(mp, repR), dt);
         g_hv[HV_ART]   = approach(g_hv[HV_ART],   !g_show_eq && !g_show_settings && !g_show_lyrics && CheckCollisionPointRec(mp, artR), dt);
 
+        // ---- context menu: a left press while open either acts or dismisses (and is swallowed) ----
+        bool ctxSwallow = false;
+        if (g_ctx_open && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            ctxSwallow = true;
+            Rectangle m = ctx_menu_rect(dCard);
+            const char *items[2]; bool en[2];
+            int n = ctx_menu_items(items, en);
+            for (int i = 0; i < n; i++) {
+                if (!en[i] || !CheckCollisionPointRec(dmp, ctx_item_rect(m, i))) continue;
+                if (g_ctx_view == 0 && i == 0) playlist_queue_insert_next(&g_pl, g_ctx_target);
+                else if (g_ctx_view == 0 && i == 1) {
+                    bool removedCur = playlist_remove(&g_pl, g_ctx_target);
+                    if (removedCur) { const char *pp = playlist_current(&g_pl); if (pp) load_file(pp); else reset_now_playing(); }
+                } else if (g_ctx_view == 2) playlist_queue_remove(&g_pl, g_ctx_target);
+                break;
+            }
+            g_ctx_open = false;
+        }
+        // right-click a row in the playlist/queue tab → open the menu there
+        if (g_show_queue && dw > 0 && IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) && !g_naming && !g_confirm_overwrite) {
+            g_ctx_open = false;
+            if ((g_drawer_view == 0 || g_drawer_view == 2) &&
+                CheckCollisionPointRec(dmp, (Rectangle){ dCard.x, (float)dl.listTop, dCard.width, (float)(dl.visible * dRowH) })) {
+                int row = g_queue_scroll + ((int)dmp.y - dl.listTop) / dRowH;
+                if (row >= 0 && row < dTotal) {
+                    g_ctx_open = true; g_ctx_view = g_drawer_view; g_ctx_target = g_filt[row];
+                    g_ctx_at = dmp;
+                }
+            }
+        }
+
         // ---- clicks ----
-        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        if (!ctxSwallow && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             if (CheckCollisionPointRec(mp, closeR)) break;
             else if (CheckCollisionPointRec(mp, minR)) MinimizeWindow();
             else if (CheckCollisionPointRec(mp, openR)) open_dialog();
@@ -688,7 +758,7 @@ int main(int argc, char **argv) {
         }
 
         // ---- drawer clicks (dmp is drawer-local; rects live in [0,DRAWER_W]) ----
-        if (g_show_queue && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        if (!ctxSwallow && g_show_queue && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             if (g_confirm_overwrite) {
                 if (CheckCollisionPointRec(dmp, dYesR)) { drawer_save(g_name_buf); g_confirm_overwrite = false; }
                 else if (CheckCollisionPointRec(dmp, dNoR)) { g_confirm_overwrite = false; }
@@ -725,11 +795,18 @@ int main(int argc, char **argv) {
                     int row = g_queue_scroll + ((int)dmp.y - dl.listTop) / dRowH;
                     if (row >= 0 && row < dTotal) {
                         int pos = g_filt[row];
-                        double now = GetTime();
-                        if (g_last_click_idx == pos && now - g_last_click_t < 0.35) {   // double-click → jump; queue order untouched
-                            playlist_queue_jump(&g_pl, pos); load_file(playlist_current(&g_pl));
-                            g_last_click_t = -1;
-                        } else { g_last_click_t = now; g_last_click_idx = pos; }
+                        if (dmp.x >= dCard.x + dCard.width - 30 && dmp.x <= dCard.x + dCard.width - 4) {
+                            playlist_queue_remove(&g_pl, pos);   // remove × (the playing entry refuses)
+                        } else {
+                            double now = GetTime();
+                            if (g_last_click_idx == pos && now - g_last_click_t < 0.35) {   // double-click → jump; queue order untouched
+                                playlist_queue_jump(&g_pl, pos); load_file(playlist_current(&g_pl));
+                                g_last_click_t = -1;
+                            } else {
+                                g_last_click_t = now; g_last_click_idx = pos;
+                                if (!g_search[0]) { g_q_press = pos; g_q_press_y = dmp.y; g_q_drag_view = 2; }   // drag-reorder on the unfiltered list
+                            }
+                        }
                     }
                 } else if (g_drawer_view == 0 && CheckCollisionPointRec(dmp, dCard)) {
                     if (qcount > 0 && CheckCollisionPointRec(dmp, dClearR)) { playlist_clear(&g_pl); reset_now_playing(); g_queue_scroll = 0; g_search[0] = 0; }
@@ -752,24 +829,28 @@ int main(int argc, char **argv) {
                                     g_last_click_t = -1;
                                 } else {
                                     g_last_click_t = now; g_last_click_idx = idx;
-                                    if (!g_search[0]) { g_q_press = idx; g_q_press_y = dmp.y; }  // drag-reorder only on the unfiltered list
+                                    if (!g_search[0]) { g_q_press = idx; g_q_press_y = dmp.y; g_q_drag_view = 0; }  // drag-reorder only on the unfiltered list
                                 }
                             }
                         }
                     }
                 }
             }
-        } else if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) g_search_focus = false;
+        } else if (!ctxSwallow && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) g_search_focus = false;
 
-        // playlist drag-to-reorder (unfiltered list only, so row == playlist index)
+        // drag-to-reorder (unfiltered lists only, so row == playlist index / queue pos)
         if (g_q_press >= 0 && g_q_drag < 0 && fabsf(mp.y - g_q_press_y) > 6) g_q_drag = g_q_press;
         if (g_q_drag >= 0) {
             int t = g_queue_scroll + ((int)dmp.y - dl.listTop) / dRowH;
-            t = clampi(t, 0, qcount - 1);
+            int lim = (g_q_drag_view == 2) ? playlist_queue_count(&g_pl) : qcount;
+            t = clampi(t, 0, lim - 1);
             g_q_target = t;
         }
         if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
-            if (g_q_drag >= 0 && g_q_target >= 0 && g_q_target != g_q_drag) playlist_move(&g_pl, g_q_drag, g_q_target);
+            if (g_q_drag >= 0 && g_q_target >= 0 && g_q_target != g_q_drag) {
+                if (g_q_drag_view == 2) playlist_queue_move(&g_pl, g_q_drag, g_q_target);
+                else                    playlist_move(&g_pl, g_q_drag, g_q_target);
+            }
             g_q_press = g_q_drag = g_q_target = -1;
             vol_drag = false;
         }
@@ -801,7 +882,8 @@ int main(int argc, char **argv) {
             } else if (g_audio) audio_set_volume(g_audio, audio_get_volume(g_audio) + wheel * 0.05f);
         }
         // ---- text entry: Save-flow name, or the open tab's search box ----
-        if (!g_show_queue) g_search_focus = false;
+        if (!g_show_queue) { g_search_focus = false; g_ctx_open = false; }
+        if (g_ctx_open && IsKeyPressed(KEY_ESCAPE)) g_ctx_open = false;
         if (g_naming) {
             text_input_utf8(g_name_buf, sizeof(g_name_buf), true);
             if (IsKeyPressed(KEY_BACKSPACE)) text_backspace_utf8(g_name_buf);
@@ -954,7 +1036,9 @@ int main(int argc, char **argv) {
                     DrawTextEx(fSmall, "Open", (Vector2){ dOpenR.x + (dOpenR.width - ow2.x) / 2, dOpenR.y + 7 }, 14, 0.3f, ho ? TXT : MUT);
                 } else if (g_drawer_view == 2) {
                     DrawTextEx(fEye, "UP NEXT", (Vector2){ dCard.x + 14, dCard.y + 47 }, 11, 2.0f, alpha(g_accent, 190));
-                    const char *sh = playlist_shuffle(&g_pl) ? "shuffle on" : "playlist order";
+                    char sh[48];
+                    snprintf(sh, sizeof(sh), "%s%s", playlist_shuffle(&g_pl) ? "shuffle on" : "playlist order",
+                             playlist_queue_edited(&g_pl) ? " \xc2\xb7 edited" : "");
                     Vector2 shw = MeasureTextEx(fSmall, sh, 12, 0.3f);
                     DrawTextEx(fSmall, sh, (Vector2){ dCard.x + dCard.width - 14 - shw.x, dCard.y + 46 }, 12, 0.3f, alpha(MUT, 160));
                 } else {
@@ -974,7 +1058,7 @@ int main(int argc, char **argv) {
                         float ry = (float)(dl.listTop + r * dRowH);
                         bool isCur = (idx == cur);
                         bool hov = CheckCollisionPointRec(dmp, (Rectangle){ dCard.x, ry, dCard.width, (float)dRowH });
-                        bool isDrag = (idx == g_q_drag);
+                        bool isDrag = (g_q_drag_view == 0 && idx == g_q_drag);
                         Rectangle row = { dCard.x + 6, ry, dCard.width - 12, (float)dRowH - 4 };
                         if (isCur)        DrawRectangleRounded(row, 0.35f, 6, alpha(g_accent, 32));
                         else if (isDrag)  DrawRectangleRounded(row, 0.35f, 6, (Color){ 255, 255, 255, 22 });
@@ -990,7 +1074,7 @@ int main(int argc, char **argv) {
                             DrawLineEx((Vector2){ xx + 5, xy - 5 }, (Vector2){ xx - 5, xy + 5 }, 1.7f, xc);
                         }
                     }
-                    if (g_q_drag >= 0 && g_q_target >= 0 && g_q_target >= g_queue_scroll && g_q_target < g_queue_scroll + dl.visible) {
+                    if (g_q_drag >= 0 && g_q_drag_view == 0 && g_q_target >= 0 && g_q_target >= g_queue_scroll && g_q_target < g_queue_scroll + dl.visible) {
                         float ly = (float)(dl.listTop + (g_q_target - g_queue_scroll) * dRowH);
                         DrawRectangleRounded((Rectangle){ dCard.x + 6, ly - 1, dCard.width - 12, 2 }, 1, 4, g_accent);
                     }
@@ -1015,13 +1099,25 @@ int main(int argc, char **argv) {
                         bool isCur = (pos == qpos);
                         bool past  = (pos < qpos);   // already played this pass — dimmed
                         bool hov = CheckCollisionPointRec(dmp, (Rectangle){ dCard.x, ry, dCard.width, (float)dRowH });
+                        bool isDrag = (g_q_drag_view == 2 && pos == g_q_drag);
                         Rectangle row = { dCard.x + 6, ry, dCard.width - 12, (float)dRowH - 4 };
-                        if (isCur)    DrawRectangleRounded(row, 0.35f, 6, alpha(g_accent, 32));
-                        else if (hov) DrawRectangleRounded(row, 0.35f, 6, (Color){ 255, 255, 255, 12 });
+                        if (isCur)        DrawRectangleRounded(row, 0.35f, 6, alpha(g_accent, 32));
+                        else if (isDrag)  DrawRectangleRounded(row, 0.35f, 6, (Color){ 255, 255, 255, 22 });
+                        else if (hov)     DrawRectangleRounded(row, 0.35f, 6, (Color){ 255, 255, 255, 12 });
                         char num[16]; snprintf(num, sizeof(num), "%d", pos + 1);
                         DrawTextEx(fSmall, num, (Vector2){ dCard.x + 14, ry + 9 }, 13, 1.0f, isCur ? g_accent : alpha(MUT, past ? 90 : 140));
                         char nm[256]; row_display_name(g_pl.paths[idx], nm, sizeof(nm));
-                        draw_fit(fMeta, nm, (Vector2){ dCard.x + 40, ry + 7 }, 15, 0.2f, isCur ? TXT : alpha(TXT, past ? 120 : 205), dCard.width - 60);
+                        draw_fit(fMeta, nm, (Vector2){ dCard.x + 40, ry + 7 }, 15, 0.2f, isCur ? TXT : alpha(TXT, past ? 120 : 205), dCard.width - 80);
+                        if ((hov || isDrag) && !isCur) {   // remove × (the playing entry can't be removed)
+                            float xx = dCard.x + dCard.width - 17, xy = ry + (dRowH - 4) / 2.0f;
+                            Color xc = alpha(TXT, 210);
+                            DrawLineEx((Vector2){ xx - 5, xy - 5 }, (Vector2){ xx + 5, xy + 5 }, 1.7f, xc);
+                            DrawLineEx((Vector2){ xx + 5, xy - 5 }, (Vector2){ xx - 5, xy + 5 }, 1.7f, xc);
+                        }
+                    }
+                    if (g_q_drag >= 0 && g_q_drag_view == 2 && g_q_target >= 0 && g_q_target >= g_queue_scroll && g_q_target < g_queue_scroll + dl.visible) {
+                        float ly = (float)(dl.listTop + (g_q_target - g_queue_scroll) * dRowH);
+                        DrawRectangleRounded((Rectangle){ dCard.x + 6, ly - 1, dCard.width - 12, 2 }, 1, 4, g_accent);
                     }
                     if (dTotal > dl.visible) {
                         float tH = (float)(dl.visible * dRowH);
@@ -1053,6 +1149,20 @@ int main(int argc, char **argv) {
                         float tH = (float)(dl.visible * dRowH);
                         DrawRectangleRounded((Rectangle){ dCard.x + dCard.width - 5, (float)dl.listTop + tH * g_queue_scroll / g_saved_count, 3, tH * dl.visible / g_saved_count }, 1, 4, alpha(g_accent, 120));
                     }
+                }
+            }
+            // ---- row context menu (drawn above everything in the drawer) ----
+            if (g_ctx_open && !g_naming && !g_confirm_overwrite && g_drawer_view == g_ctx_view) {
+                Rectangle m = ctx_menu_rect(dCard);
+                soft_shadow(m, 0.25f, 8, 120);
+                rrBox(m, 0.25f, (Color){ 30, 27, 21, 255 }, alpha(MUT, 130));
+                const char *items[2]; bool en[2];
+                int n = ctx_menu_items(items, en);
+                for (int i = 0; i < n; i++) {
+                    Rectangle ir = ctx_item_rect(m, i);
+                    bool hi = en[i] && CheckCollisionPointRec(dmp, ir);
+                    if (hi) DrawRectangleRounded(ir, 0.35f, 6, alpha(g_accent, 36));
+                    DrawTextEx(fSmall, items[i], (Vector2){ ir.x + 12, ir.y + 7 }, 14, 0.2f, en[i] ? (hi ? TXT : alpha(TXT, 215)) : alpha(MUT, 110));
                 }
             }
             rlPopMatrix();

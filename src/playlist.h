@@ -14,16 +14,19 @@ typedef struct Playlist {
     bool shuffle;
     bool loop;
 
-    // The play queue: a permutation of [0..count) that playback always walks in
-    // sequence (order[order_pos] == index). Shuffle off → identity, so the queue
-    // mirrors the playlist. Shuffle on → an anchor song first (the one the user
-    // clicked, or the one playing when shuffle was switched on) with every other
-    // song shuffled once after it, so a full pass plays everything exactly once.
-    // The end of the queue wraps the *same* order when loop is on (no re-shuffle).
+    // The play queue: a list of playlist indices that playback walks in sequence
+    // (order[order_pos] == index). Rebuilt as a permutation — shuffle off →
+    // identity, so the queue mirrors the playlist; shuffle on → an anchor song
+    // first (the one the user clicked, or the one playing when shuffle was
+    // switched on) with every other song shuffled once after it, so a full pass
+    // plays everything exactly once. Manual edits (insert/remove/reorder) may
+    // then introduce duplicates and holes; queue_edited tracks that. The end of
+    // the queue wraps the *same* order when loop is on (no re-shuffle).
     int* order;
     int  order_count;
     int  order_cap;
-    int  order_pos;   // cursor into order[]; order[order_pos] == index
+    int  order_pos;      // cursor into order[]; order[order_pos] == index
+    bool queue_edited;   // manually customized since the last rebuild
 
     // Saved-playlist bookkeeping for the drawer's Save button.
     char name[128];   // display name (file stem); empty when untitled
@@ -57,6 +60,14 @@ void playlist_play_index(Playlist* p, int i);
 void playlist_queue_jump(Playlist* p, int pos);
 int  playlist_queue_at(const Playlist* p, int pos);  // playlist index at queue pos; -1 if out of range
 int  playlist_queue_pos(const Playlist* p);          // cursor position in the queue; -1 when empty
+int  playlist_queue_count(const Playlist* p);        // queue length (≠ count once edited)
+
+// Manual queue edits. They never touch the playlist itself, and are discarded
+// the next time the queue rebuilds (playlist click / shuffle toggle / load).
+void playlist_queue_insert_next(Playlist* p, int idx);  // idx plays right after the current song; duplicates fine
+bool playlist_queue_remove(Playlist* p, int pos);       // refuses the playing entry (pos == order_pos)
+void playlist_queue_move(Playlist* p, int from, int to);
+bool playlist_queue_edited(const Playlist* p);
 
 int playlist_count(const Playlist* p);
 int playlist_index(const Playlist* p);

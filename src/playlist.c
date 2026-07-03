@@ -35,6 +35,7 @@ static void order_point_at_current(Playlist* p) {
 // Queue mirrors the playlist (shuffle off): identity order, cursor on the
 // current song.
 static void queue_identity(Playlist* p) {
+    p->queue_edited = false;
     if (p->count <= 0) { p->order_count = 0; p->order_pos = -1; return; }
     order_ensure_cap(p, p->count);
     for (int i = 0; i < p->count; i++) p->order[i] = i;
@@ -45,6 +46,7 @@ static void queue_identity(Playlist* p) {
 // Shuffled queue with `anchor` first: the anchor song plays now, then every other
 // song exactly once in random order (Fisher-Yates over positions 1..count-1).
 static void queue_shuffle_anchored(Playlist* p, int anchor) {
+    p->queue_edited = false;
     if (p->count <= 0) { p->order_count = 0; p->order_pos = -1; return; }
     if (anchor < 0 || anchor >= p->count) anchor = 0;
     order_ensure_cap(p, p->count);
@@ -74,6 +76,7 @@ void playlist_clear(Playlist* p) {
     p->index = -1;
     p->order_count = 0;
     p->order_pos = -1;
+    p->queue_edited = false;
     p->name[0] = 0;
     p->dirty = false;
 }
@@ -113,21 +116,38 @@ bool playlist_remove(Playlist* p, int idx) {
     free(p->paths[idx]);
     for (int i = idx; i < p->count - 1; i++) p->paths[i] = p->paths[i+1];
     p->count--;
-    if (p->count == 0)              p->index = -1;
-    else if (p->index >= p->count)  p->index = p->count - 1;
-    else if (p->index > idx)        p->index--;
 
-    // Drop idx from the queue and renumber the entries above it (an identity
-    // queue stays identity, a shuffled one keeps its sequence).
-    int w = 0;
+    // Drop every queue entry of the removed song (an edited queue may hold it
+    // several times) and renumber the rest. The cursor is tracked by position,
+    // not by re-finding the song — duplicates make that ambiguous.
+    int w = 0, newpos = -1, before = 0;
     for (int r = 0; r < p->order_count; r++) {
         int v = p->order[r];
         if (v == idx) continue;
         if (v > idx) v--;
+        if (r == p->order_pos) newpos = w;
+        if (r <  p->order_pos) before = w + 1;   // where the entry after the cursor now sits
         p->order[w++] = v;
     }
     p->order_count = w;
-    order_point_at_current(p);
+
+    if (p->count == 0) {
+        p->index = -1;
+        p->order_pos = -1;
+    } else if (!was_current) {
+        if (p->index > idx) p->index--;
+        if (newpos >= 0) p->order_pos = newpos;
+        else order_point_at_current(p);           // shouldn't happen; keep the cursor sane
+    } else if (p->order_count > 0) {
+        // The playing song went away: continue from the entry that followed it
+        // (or wrap/stop at the tail when it was last).
+        p->order_pos = (before < p->order_count) ? before : (p->loop ? 0 : p->order_count - 1);
+        p->index = p->order[p->order_pos];
+    } else {
+        // Queue held only the removed song — rebuild it for the current mode.
+        if (p->index >= p->count) p->index = p->count - 1;
+        playlist_rebuild_queue(p);
+    }
     p->dirty = true;
     return was_current;
 }
@@ -145,10 +165,10 @@ void playlist_move(Playlist* p, int from, int to) {
 
     // Keep the current track's identity stable across the reorder.
     p->index = remap_after_move(p->index, from, to);
-    if (p->shuffle) {   // shuffled queue keeps its play sequence; entries renumber
+    if (p->shuffle || p->queue_edited) {   // custom/shuffled queue keeps its play sequence; entries renumber
         for (int i = 0; i < p->order_count; i++)
             p->order[i] = remap_after_move(p->order[i], from, to);
-    } else {            // queue mirrors the playlist's new order
+    } else {                               // pristine queue mirrors the playlist's new order
         queue_identity(p);
     }
     p->dirty = true;
@@ -190,8 +210,10 @@ const char* playlist_prev(Playlist* p) {
 void playlist_play_index(Playlist* p, int i) {
     if (i < 0 || i >= p->count) return;
     p->index = i;
+    // A playlist click starts a fresh listening session: the queue rebuilds and
+    // any manual queue edits are discarded.
     if (p->shuffle) queue_shuffle_anchored(p, i);   // clicked song first, rest reshuffled
-    else            order_point_at_current(p);      // identity queue: cursor jumps to i
+    else            queue_identity(p);              // playlist order, cursor on i
 }
 
 void playlist_queue_jump(Playlist* p, int pos) {
@@ -206,6 +228,44 @@ int playlist_queue_at(const Playlist* p, int pos) {
 }
 
 int playlist_queue_pos(const Playlist* p) { return p->order_pos; }
+int playlist_queue_count(const Playlist* p) { return p->order_count; }
+
+void playlist_queue_insert_next(Playlist* p, int idx) {
+    if (idx < 0 || idx >= p->count) return;
+    order_ensure_cap(p, p->order_count + 1);
+    int at = (p->order_pos >= 0) ? p->order_pos + 1 : 0;
+    if (at > p->order_count) at = p->order_count;
+    for (int i = p->order_count; i > at; i--) p->order[i] = p->order[i - 1];
+    p->order[at] = idx;
+    p->order_count++;
+    if (p->order_pos < 0) { p->order_pos = 0; p->index = idx; }   // queue was empty — it becomes current
+    p->queue_edited = true;   // a queue tweak, not a playlist change: dirty stays untouched
+}
+
+bool playlist_queue_remove(Playlist* p, int pos) {
+    if (pos < 0 || pos >= p->order_count || pos == p->order_pos) return false;
+    for (int i = pos; i < p->order_count - 1; i++) p->order[i] = p->order[i + 1];
+    p->order_count--;
+    if (pos < p->order_pos) p->order_pos--;
+    p->queue_edited = true;
+    return true;
+}
+
+void playlist_queue_move(Playlist* p, int from, int to) {
+    if (from < 0 || from >= p->order_count) return;
+    if (to < 0) to = 0;
+    if (to >= p->order_count) to = p->order_count - 1;
+    if (from == to) return;
+    int moved = p->order[from];
+    if (from < to) for (int i = from; i < to; i++) p->order[i] = p->order[i + 1];
+    else           for (int i = from; i > to; i--) p->order[i] = p->order[i - 1];
+    p->order[to] = moved;
+    // remap_after_move works on positions just as well as on indices
+    p->order_pos = remap_after_move(p->order_pos, from, to);
+    p->queue_edited = true;
+}
+
+bool playlist_queue_edited(const Playlist* p) { return p->queue_edited; }
 
 int playlist_count(const Playlist* p) { return p->count; }
 int playlist_index(const Playlist* p) { return p->index; }
