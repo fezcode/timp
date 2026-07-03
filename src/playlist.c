@@ -5,7 +5,7 @@
 #include <string.h>
 #include <time.h>
 
-// ---------- shuffle order ----------
+// ---------- play queue ----------
 static void order_ensure_cap(Playlist* p, int need) {
     if (p->order_cap >= need) return;
     int cap = p->order_cap ? p->order_cap : 16;
@@ -15,8 +15,8 @@ static void order_ensure_cap(Playlist* p, int need) {
 }
 
 // How a stored index moves when paths[from] is relocated to slot `to`. Mirrors the
-// index fixup playlist_move applies, so the shuffle order keeps pointing at the
-// same songs after a drag-reorder.
+// index fixup playlist_move applies, so the queue keeps pointing at the same songs
+// after a drag-reorder.
 static int remap_after_move(int v, int from, int to) {
     if (v == from)                 return to;
     if (from < v && v <= to)       return v - 1;
@@ -24,26 +24,40 @@ static int remap_after_move(int v, int from, int to) {
     return v;
 }
 
-// Point the cursor at whichever slot currently holds the playing track, so
-// playback continues from there instead of restarting the shuffle walk.
+// Point the cursor at whichever queue slot currently holds the playing track, so
+// playback continues from there instead of restarting the queue walk.
 static void order_point_at_current(Playlist* p) {
     p->order_pos = (p->order_count > 0) ? 0 : -1;
     for (int i = 0; i < p->order_count; i++)
         if (p->order[i] == p->index) { p->order_pos = i; break; }
 }
 
-// Build a fresh random permutation of [0..count). The current track is left
-// wherever it lands and the cursor points at it (so the song keeps playing).
-static void order_build(Playlist* p) {
+// Queue mirrors the playlist (shuffle off): identity order, cursor on the
+// current song.
+static void queue_identity(Playlist* p) {
     if (p->count <= 0) { p->order_count = 0; p->order_pos = -1; return; }
     order_ensure_cap(p, p->count);
     for (int i = 0; i < p->count; i++) p->order[i] = i;
-    for (int i = p->count - 1; i > 0; i--) {       // Fisher-Yates
-        int j = rand() % (i + 1);
+    p->order_count = p->count;
+    order_point_at_current(p);
+}
+
+// Shuffled queue with `anchor` first: the anchor song plays now, then every other
+// song exactly once in random order (Fisher-Yates over positions 1..count-1).
+static void queue_shuffle_anchored(Playlist* p, int anchor) {
+    if (p->count <= 0) { p->order_count = 0; p->order_pos = -1; return; }
+    if (anchor < 0 || anchor >= p->count) anchor = 0;
+    order_ensure_cap(p, p->count);
+    int w = 0;
+    p->order[w++] = anchor;
+    for (int i = 0; i < p->count; i++) if (i != anchor) p->order[w++] = i;
+    for (int i = p->count - 1; i > 1; i--) {
+        int j = 1 + rand() % i;   // uniform in [1..i]; slot 0 (the anchor) never moves
         int t = p->order[i]; p->order[i] = p->order[j]; p->order[j] = t;
     }
     p->order_count = p->count;
-    order_point_at_current(p);
+    p->order_pos = 0;
+    p->index = anchor;
 }
 
 void playlist_init(Playlist* p) {
@@ -85,11 +99,11 @@ void playlist_add(Playlist* p, const char* path) {
     }
     p->paths[p->count++] = dupstr(path);
     if (p->index < 0) p->index = 0;
-    if (p->shuffle) {                     // append the new track to the tail of the order
-        order_ensure_cap(p, p->order_count + 1);
-        p->order[p->order_count++] = p->count - 1;
-        if (p->order_pos < 0) p->order_pos = 0;
-    }
+    // New songs join the tail of the queue in both modes (keeps identity intact
+    // when shuffle is off, and guarantees the song still gets played when on).
+    order_ensure_cap(p, p->order_count + 1);
+    p->order[p->order_count++] = p->count - 1;
+    if (p->order_pos < 0) p->order_pos = 0;
     p->dirty = true;
 }
 
@@ -103,17 +117,17 @@ bool playlist_remove(Playlist* p, int idx) {
     else if (p->index >= p->count)  p->index = p->count - 1;
     else if (p->index > idx)        p->index--;
 
-    if (p->shuffle) {                     // drop idx and renumber the entries above it
-        int w = 0;
-        for (int r = 0; r < p->order_count; r++) {
-            int v = p->order[r];
-            if (v == idx) continue;
-            if (v > idx) v--;
-            p->order[w++] = v;
-        }
-        p->order_count = w;
-        order_point_at_current(p);
+    // Drop idx from the queue and renumber the entries above it (an identity
+    // queue stays identity, a shuffled one keeps its sequence).
+    int w = 0;
+    for (int r = 0; r < p->order_count; r++) {
+        int v = p->order[r];
+        if (v == idx) continue;
+        if (v > idx) v--;
+        p->order[w++] = v;
     }
+    p->order_count = w;
+    order_point_at_current(p);
     p->dirty = true;
     return was_current;
 }
@@ -131,9 +145,11 @@ void playlist_move(Playlist* p, int from, int to) {
 
     // Keep the current track's identity stable across the reorder.
     p->index = remap_after_move(p->index, from, to);
-    if (p->shuffle) {                     // renumber the order; the cursor slot is unchanged
+    if (p->shuffle) {   // shuffled queue keeps its play sequence; entries renumber
         for (int i = 0; i < p->order_count; i++)
             p->order[i] = remap_after_move(p->order[i], from, to);
+    } else {            // queue mirrors the playlist's new order
+        queue_identity(p);
     }
     p->dirty = true;
 }
@@ -144,59 +160,52 @@ const char* playlist_current(const Playlist* p) {
 }
 
 bool playlist_has_next(const Playlist* p) {
-    if (p->count == 0) return false;
-    if (p->shuffle && p->order_count > 0) {
-        if (p->order_pos + 1 < p->order_count) return true;
-        return p->loop;
-    }
-    if (p->index + 1 < p->count) return true;
-    return p->loop;
+    if (p->order_count == 0) return false;
+    return (p->order_pos + 1 < p->order_count) || p->loop;
 }
 
 bool playlist_has_prev(const Playlist* p) {
-    if (p->count == 0) return false;
-    if (p->shuffle && p->order_count > 0) {
-        if (p->order_pos > 0) return true;
-        return p->loop;
-    }
-    if (p->index > 0) return true;
-    return p->loop;
+    if (p->order_count == 0) return false;
+    return (p->order_pos > 0) || p->loop;
 }
 
 const char* playlist_next(Playlist* p) {
-    if (p->count == 0) return NULL;
-    if (p->shuffle && p->order_count > 0) {
-        if (p->order_pos + 1 < p->order_count) p->index = p->order[++p->order_pos];
-        else if (p->loop)                      { p->order_pos = 0; p->index = p->order[0]; }
-        else return NULL;
-    } else if (p->index + 1 < p->count) {
-        p->index++;
-    } else if (p->loop) {
-        p->index = 0;
-    } else return NULL;
+    if (p->order_count == 0) return NULL;
+    if (p->order_pos + 1 < p->order_count) p->order_pos++;
+    else if (p->loop)                      p->order_pos = 0;
+    else return NULL;
+    p->index = p->order[p->order_pos];
     return p->paths[p->index];
 }
 
 const char* playlist_prev(Playlist* p) {
-    if (p->count == 0) return NULL;
-    if (p->shuffle && p->order_count > 0) {
-        if (p->order_pos > 0) p->index = p->order[--p->order_pos];
-        else if (p->loop)     { p->order_pos = p->order_count - 1; p->index = p->order[p->order_pos]; }
-        else return NULL;
-    } else if (p->index > 0) {
-        p->index--;
-    } else if (p->loop) {
-        p->index = p->count - 1;
-    } else return NULL;
+    if (p->order_count == 0) return NULL;
+    if (p->order_pos > 0) p->order_pos--;
+    else if (p->loop)     p->order_pos = p->order_count - 1;
+    else return NULL;
+    p->index = p->order[p->order_pos];
     return p->paths[p->index];
 }
 
-void playlist_set_index(Playlist* p, int i) {
+void playlist_play_index(Playlist* p, int i) {
     if (i < 0 || i >= p->count) return;
     p->index = i;
-    // A manual jump just repositions the cursor inside the existing shuffle order.
-    if (p->shuffle && p->order_count > 0) order_point_at_current(p);
+    if (p->shuffle) queue_shuffle_anchored(p, i);   // clicked song first, rest reshuffled
+    else            order_point_at_current(p);      // identity queue: cursor jumps to i
 }
+
+void playlist_queue_jump(Playlist* p, int pos) {
+    if (pos < 0 || pos >= p->order_count) return;
+    p->order_pos = pos;
+    p->index = p->order[pos];
+}
+
+int playlist_queue_at(const Playlist* p, int pos) {
+    if (pos < 0 || pos >= p->order_count) return -1;
+    return p->order[pos];
+}
+
+int playlist_queue_pos(const Playlist* p) { return p->order_pos; }
 
 int playlist_count(const Playlist* p) { return p->count; }
 int playlist_index(const Playlist* p) { return p->index; }
@@ -204,12 +213,15 @@ int playlist_index(const Playlist* p) { return p->index; }
 void playlist_set_shuffle(Playlist* p, bool on) {
     if (p->shuffle == on) return;
     p->shuffle = on;
-    if (on) order_build(p);
-    else { p->order_count = 0; p->order_pos = -1; }
+    if (on) queue_shuffle_anchored(p, p->index);   // current song keeps playing, rest shuffled after it
+    else    queue_identity(p);                     // queue snaps back to playlist order
 }
-void playlist_reshuffle(Playlist* p) {
-    if (p->shuffle) order_build(p);
+
+void playlist_rebuild_queue(Playlist* p) {
+    if (p->shuffle) queue_shuffle_anchored(p, p->index);
+    else            queue_identity(p);
 }
+
 void playlist_set_loop(Playlist* p, bool on) { p->loop = on; }
 bool playlist_shuffle(const Playlist* p) { return p->shuffle; }
 bool playlist_loop(const Playlist* p) { return p->loop; }

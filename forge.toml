@@ -1,10 +1,10 @@
-[app]
+﻿[app]
 name    = "Timp"
-version = "0.8.1"
+version = "0.9.0"
 id      = "io.timp.timp"
 
 [meta]
-publisher = "Şamil Bülbül (Fezcode)"
+publisher = "Åamil BÃ¼lbÃ¼l (Fezcode)"
 comments  = "Native, album-art music player"
 
 [ui]
@@ -15,14 +15,14 @@ window_title = "Timp Setup"
 default_dir = "${PROGRAMFILES}/Timp"
 
 # Settings live in %APPDATA%\Timp (outside the install dir), so uninstall
-# never touches them — nothing to keep here.
+# never touches them â€” nothing to keep here.
 [uninstall]
 keep = []
 
 [[steps]]
 type  = "welcome"
-title = "Timp 0.8.1"
-body  = "This wizard will install Timp 0.8.1 on your computer.\n\nTimp is a small, native, album-art music player.\n\nClick Next to continue."
+title = "Timp 0.9.0"
+body  = "This wizard will install Timp 0.9.0 on your computer.\n\nTimp is a small, native, album-art music player.\n\nClick Next to continue."
 
 [[steps]]
 type  = "license"
@@ -33,7 +33,7 @@ file  = "LICENSE.txt"
 [[steps]]
 type  = "folder"
 title = "Select Folder"
-body  = "Choose where to install Timp 0.8.1."
+body  = "Choose where to install Timp 0.9.0."
 
 [[steps]]
 type  = "shortcuts"
@@ -56,7 +56,7 @@ target  = "${INSTALLDIR}/timp.exe"
 label   = "Run Timp after install"
 checked = true
 
-# Application payload — staged clean by installer.ps1 (timp.exe + bundled MinGW
+# Application payload â€” staged clean by installer.ps1 (timp.exe + bundled MinGW
 # runtime DLLs: libraylib.dll, glfw3.dll, libwinpthread-1.dll).
 [[dirs]]
 src = "dist/win-x64"
@@ -90,4 +90,4 @@ data  = "${INSTALLDIR}"
 hive  = "HKLM"
 key   = "Software\\Timp\\Timp"
 value = "Version"
-data  = "0.8.1"
+data  = "0.9.0"

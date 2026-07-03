@@ -4,20 +4,22 @@
 #include <stdbool.h>
 
 typedef struct Playlist {
+    // The playlist proper: the user's songs in the user's order. Shuffle never
+    // reorders this — only an explicit drag/move does.
     char** paths;
     int count;
     int cap;
-    int index;
+    int index;        // currently-playing entry (index into paths); -1 when empty
 
     bool shuffle;
     bool loop;
 
-    // Fixed shuffle order: a permutation of [0..count). While shuffle is on,
-    // next/prev move `order_pos` through this array and order[order_pos]==index.
-    // The order is built once when shuffle is toggled on (the current track keeps
-    // playing wherever it lands); newly-added tracks append to the end; remove/move
-    // keep it a valid permutation with the cursor still on the current song. The
-    // end of the list wraps the *same* order when loop is on (no re-shuffle).
+    // The play queue: a permutation of [0..count) that playback always walks in
+    // sequence (order[order_pos] == index). Shuffle off → identity, so the queue
+    // mirrors the playlist. Shuffle on → an anchor song first (the one the user
+    // clicked, or the one playing when shuffle was switched on) with every other
+    // song shuffled once after it, so a full pass plays everything exactly once.
+    // The end of the queue wraps the *same* order when loop is on (no re-shuffle).
     int* order;
     int  order_count;
     int  order_cap;
@@ -45,7 +47,16 @@ bool playlist_has_prev(const Playlist* p);
 
 const char* playlist_next(Playlist* p);
 const char* playlist_prev(Playlist* p);
-void playlist_set_index(Playlist* p, int i);
+
+// "The user clicked song i in the playlist": shuffle on → i becomes the head of
+// a freshly shuffled queue (all other songs once, in random order, after it);
+// shuffle off → the cursor just moves to i in the playlist-order queue.
+void playlist_play_index(Playlist* p, int i);
+
+// Jump the cursor to queue position pos without changing the queue order.
+void playlist_queue_jump(Playlist* p, int pos);
+int  playlist_queue_at(const Playlist* p, int pos);  // playlist index at queue pos; -1 if out of range
+int  playlist_queue_pos(const Playlist* p);          // cursor position in the queue; -1 when empty
 
 int playlist_count(const Playlist* p);
 int playlist_index(const Playlist* p);
@@ -54,9 +65,9 @@ void playlist_set_shuffle(Playlist* p, bool on);
 void playlist_set_loop(Playlist* p, bool on);
 bool playlist_shuffle(const Playlist* p);
 bool playlist_loop(const Playlist* p);
-// Rebuild the shuffle order from scratch (no-op when shuffle is off). The current
-// track keeps playing where it lands in the new order.
-void playlist_reshuffle(Playlist* p);
+// Rebuild the queue for the current mode: identity when shuffle is off, a fresh
+// current-song-first shuffle when on. (Used after loading a saved playlist.)
+void playlist_rebuild_queue(Playlist* p);
 
 // Saved-playlist name + dirty flag (drives the drawer's Save button).
 const char* playlist_name(const Playlist* p);
