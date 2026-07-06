@@ -1,5 +1,5 @@
-// Standalone generator for assets/timp.ico. Reuses the SDL-free icon renderer.
-// Writes a 4-frame ICO (16/32/48/256), each frame a 32-bit BGRA DIB.
+// Standalone generator for assets/timp.ico. Reuses the shared icon renderer.
+// Writes a 6-frame ICO (16/24/32/48/64/256), each frame a 32-bit BGRA DIB.
 #include "icon.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,8 +23,7 @@ static uint32_t frame_bytes(int size) {
 
 static void write_frame(FILE *f, int size) {
     uint8_t *rgba = (uint8_t *)malloc((size_t)size * size * 4);
-    // Default skin colors: accent green (80,255,130) on slate (28,36,46).
-    icon_render_rgba(rgba, size, 80, 255, 130, 28, 36, 46, 1);
+    icon_render_rgba(rgba, size);
 
     // BITMAPINFOHEADER (height doubled for XOR + AND masks).
     w32(f, 40);
@@ -59,7 +58,7 @@ static void write_frame(FILE *f, int size) {
 
 int main(int argc, char **argv) {
     const char *out = (argc > 1) ? argv[1] : "assets/timp.ico";
-    const int sizes[] = { 16, 32, 48, 256 };
+    const int sizes[] = { 16, 24, 32, 48, 64, 256 };
     const int n = (int)(sizeof(sizes) / sizeof(sizes[0]));
 
     FILE *f = fopen(out, "wb");

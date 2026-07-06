@@ -15,6 +15,7 @@
 #include "rlconfig.h"
 #include "mediakeys.h"
 #include "singleinst.h"
+#include "icon.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -30,7 +31,7 @@
 #define ARTS (WW - 2 * PAD)
 #define DRAWER_W 320           // playlist drawer width (logical px); window grows by this
 #define WMAXW (WW + DRAWER_W)  // render target width covers player + drawer
-#define TIMP_VERSION "0.10.0"  // keep in sync with forge.toml
+#define TIMP_VERSION "0.10.1"  // keep in sync with forge.toml
 
 // ---------- palette ----------
 static const Color BG0 = { 24, 21, 17, 255 };
@@ -484,19 +485,19 @@ int main(int argc, char **argv) {
     RenderTexture2D target = LoadRenderTexture(WMAXW * SS, WH * SS);
     SetTextureFilter(target.texture, TEXTURE_FILTER_BILINEAR);
 
-    // app/taskbar icon — gold rounded square + play mark, rendered procedurally
+    // app/taskbar icon — the shared procedural mark (icon.h), same artwork as
+    // the embedded .ico; several sizes so title bar / taskbar / Alt-Tab stay crisp
     {
-        RenderTexture2D it = LoadRenderTexture(64, 64);
-        BeginTextureMode(it);
-        ClearBackground(BLANK);
-        DrawRectangleRounded((Rectangle){ 4, 4, 56, 56 }, 0.3f, 16, (Color){ 201, 164, 90, 255 });
-        DrawTriangle((Vector2){ 25, 18 }, (Vector2){ 25, 46 }, (Vector2){ 47, 32 }, (Color){ 20, 16, 10, 255 });
-        EndTextureMode();
-        Image ico = LoadImageFromTexture(it.texture);
-        ImageFlipVertical(&ico);
-        SetWindowIcon(ico);
-        UnloadImage(ico);
-        UnloadRenderTexture(it);
+        static const int is[] = { 16, 24, 32, 48, 64 };
+        const int n = (int)(sizeof(is) / sizeof(is[0]));
+        Image icons[sizeof(is) / sizeof(is[0])];
+        for (int i = 0; i < n; i++) {
+            icons[i] = (Image){ MemAlloc(is[i] * is[i] * 4), is[i], is[i], 1,
+                                PIXELFORMAT_UNCOMPRESSED_R8G8B8A8 };
+            icon_render_rgba(icons[i].data, is[i]);
+        }
+        SetWindowIcons(icons, n);
+        for (int i = 0; i < n; i++) UnloadImage(icons[i]);
     }
 
     mediakeys_start();

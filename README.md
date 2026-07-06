@@ -161,6 +161,7 @@ src/
   eq.c / fft.c   10-band EQ + spectrum FFT
   playlist.c     queue / index + fixed-order shuffle
   playlistio.c   save / load / list .m3u8 playlists
+  icon.h         procedural app icon (window icon + .ico + installer)
   vendor_ma.c    miniaudio implementation unit
 vendor/          miniaudio.h, stb_image.h (fetched)
 assets/timp.ico  embedded Windows executable icon
