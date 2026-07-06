@@ -31,7 +31,7 @@
 #define ARTS (WW - 2 * PAD)
 #define DRAWER_W 320           // playlist drawer width (logical px); window grows by this
 #define WMAXW (WW + DRAWER_W)  // render target width covers player + drawer
-#define TIMP_VERSION "0.10.1"  // keep in sync with forge.toml
+#define TIMP_VERSION "0.10.2"  // keep in sync with forge.toml
 
 // ---------- palette ----------
 static const Color BG0 = { 24, 21, 17, 255 };
@@ -437,7 +437,15 @@ static void ic_repeat(float cx, float cy, float r, Color c) {
     DrawTriangle((Vector2){ cx + r * 0.95f, cy - r * 0.75f }, (Vector2){ cx + r * 0.35f, cy - r * 0.55f }, (Vector2){ cx + r * 0.95f, cy + r * 0.05f }, c);
 }
 
+// Declared by hand (windows.h clashes with raylib names); lives in shell32.
+__declspec(dllimport) long __stdcall SetCurrentProcessExplicitAppUserModelID(const wchar_t *app_id);
+
 int main(int argc, char **argv) {
+    // Stable taskbar identity. Without it the Win11 taskbar keys the app by exe
+    // path and can serve a stale cached icon from whatever lived there before
+    // (the pre-raylib Timp had no embedded icon at all → blank taskbar icon).
+    SetCurrentProcessExplicitAppUserModelID(L"Fezcode.Timp");
+
     // Decode the real Unicode args (Windows argv is ANSI — Turkish "İ"/"ı" etc.
     // arrive mangled and fail to open). args[0] is the program, args[1..] paths.
     int argn = 0;
