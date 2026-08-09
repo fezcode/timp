@@ -8,7 +8,9 @@ typography, an accent color sampled from the artwork, a live spectrum, a
 10-band EQ, a slide-out saveable playlist drawer, and synced lyrics. Audio is
 decoded by [miniaudio](https://miniaud.io/) (MP3 / FLAC / OGG / WAV, Unicode paths).
 No installer, no runtime, no telemetry — raylib is linked statically, so the
-whole app is a single `timp.exe`.
+whole app is a single `timp.exe`. Runs natively on **Windows and macOS** — the
+Mac build ships as a self-contained `Timp.app` with system media keys and
+Finder "Open With" support.
 
 <p align="center">
   <img src="examples/main.png" alt="Timp — now playing" width="360"/>
@@ -67,9 +69,9 @@ whole app is a single `timp.exe`.
 
 ### Dependencies
 
-- A C11 compiler (MSYS2 MinGW-w64 `gcc`) and `pkg-config`
-- **raylib** (`mingw-w64-x86_64-raylib`)
-- `miniaudio.h` and `stb_image.h` — fetched automatically by `setup.ps1`
+- A C11 compiler (MSYS2 MinGW-w64 `gcc` / Apple `clang`) and `pkg-config`
+- **raylib** (`mingw-w64-x86_64-raylib` / `brew install raylib`)
+- `miniaudio.h` and `stb_image.h` — fetched automatically on first build
 
 ### Windows (MSYS2 / MinGW64)
 
@@ -82,16 +84,28 @@ pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-pkgconf mingw-w64-x86_64-raylib
 `build.ps1` fetches the vendored headers on first run, compiles incrementally,
 embeds the `.exe` icon, and links a standalone `timp.exe` (no DLLs to ship).
 
-> Fonts are currently loaded from `C:\Windows\Fonts` (Segoe UI), so the build
-> targets Windows. Bundling an open font would make it cross-platform.
+### macOS (Homebrew, arm64)
 
-The build tooling is three small scripts:
+```sh
+brew install pkgconf raylib
+sh build-macos.sh          # → build/timp
+sh bundle-macos.sh         # → dist/macos-arm64/Timp.app (self-contained, signed)
+```
+
+Or grab **`Timp-<version>-macos-arm64.zip`** from the
+[latest macOS release](https://github.com/fezcode/timp/releases), unzip and run
+(first launch: right-click → Open, the app is ad-hoc signed). UI fonts come
+from the system (Segoe UI on Windows, SF Pro / Arial on macOS).
+
+The build tooling is a handful of small scripts:
 
 | Script | Does |
 | --- | --- |
 | `setup.ps1` | Fetches the vendored headers (`miniaudio.h`, `stb_image.h`) into `vendor/`. Run automatically by `build.ps1`. |
 | `build.ps1` | Compiles `src/*.c` and links the standalone `build\timp.exe`. |
 | `installer.ps1` | Packages `timp.exe` into a Windows `Setup.exe` via [Forge](../Forge) + `forge.toml` (installs to Program Files with shortcuts). Optional — needs the Forge toolchain. |
+| `build-macos.sh` | Compiles + links `build/timp` (clang, Homebrew raylib, the `*_mac.m` Cocoa backends). |
+| `bundle-macos.sh` | Assembles the self-contained `dist/macos-arm64/Timp.app` — `.icns` from the procedural icon, Finder file associations, bundled dylibs, ad-hoc codesign. |
 
 ## Usage
 
@@ -131,7 +145,7 @@ For the playing track, Timp looks for lyrics in this order:
 
 ## Configuration
 
-`config.ini` lives in `%APPDATA%\Timp\`. Persisted keys:
+`config.ini` lives in `%APPDATA%\Timp\` (macOS: `~/.timp/`). Persisted keys:
 
 ```ini
 volume = 0.700
@@ -144,7 +158,7 @@ win_y = ...
 ```
 
 Saved playlists are standard `.m3u8` files in `%APPDATA%\Timp\Playlists\`
-(use **Settings → Open folder** to reveal it).
+(macOS: `~/.timp/Playlists/`; use **Settings → Open folder** to reveal it).
 
 ## Project layout
 
@@ -154,10 +168,13 @@ src/
   audio.c        miniaudio engine — thread-safe decode, Unicode paths
   art.c          embedded + folder cover-art extraction & decode
   tags.c         ID3v2 / Vorbis metadata + embedded lyrics
-  lyrics.c       .lrc / .txt parsing + lrclib.net online fetch (WinHTTP)
-  osdialog.c     native open dialog + DWM rounded corners
-  rlconfig.c     persistent %APPDATA% settings
-  mediakeys.c    system-wide media-key hotkeys
+  lyrics.c       .lrc / .txt parsing + lrclib.net online fetch (WinHTTP / libcurl)
+  osdialog.c     native open dialog + DWM rounded corners (Windows)
+  osdialog_mac.m NSOpenPanel dialog, window rounding, Finder "Open With" (macOS)
+  rlconfig.c     persistent settings (%APPDATA% / ~/.timp)
+  mediakeys.c    system-wide media-key hotkeys (Windows)
+  mediakeys_mac.m media keys via MPRemoteCommandCenter (macOS)
+  singleinst.c   single instance — Win32 mutex / Unix socket file handoff
   eq.c / fft.c   10-band EQ + spectrum FFT
   playlist.c     queue / index + fixed-order shuffle
   playlistio.c   save / load / list .m3u8 playlists
