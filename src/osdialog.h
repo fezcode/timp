@@ -25,5 +25,10 @@ void os_focus_window(void *hwnd);
 // No-op off Windows.
 void os_reveal_dir(const char *utf8_path);
 
+// macOS: route Finder "Open With" / double-click (Apple Events — they never
+// arrive as argv) into the single-instance queue the main loop already polls.
+// Call once in the first instance, before the window exists. No-op elsewhere.
+void os_open_files_handler_install(void);
+
 #endif
 

@@ -95,7 +95,7 @@ void os_reveal_dir(const char *utf8_path) {
     free(w);
 }
 
-#else
+#elif !defined(__APPLE__)   /* macOS lives in osdialog_mac.m */
 int os_open_audio_files(void (*on_file)(const char *, void *), void *ud) {
     (void)on_file; (void)ud;
     return 0;
@@ -109,4 +109,9 @@ char **os_args_utf8(int argc, char **argv, int *out_count) {
 }
 void os_focus_window(void *hwnd) { (void)hwnd; }
 void os_reveal_dir(const char *utf8_path) { (void)utf8_path; }
+#endif
+
+// Finder open-events only exist on macOS (implemented in osdialog_mac.m).
+#ifndef __APPLE__
+void os_open_files_handler_install(void) {}
 #endif

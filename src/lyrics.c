@@ -128,17 +128,6 @@ int lyrics_active(const Lyrics *l, double t) {
 }
 
 // ---------------- online fetch (lrclib.net) ----------------
-#ifdef _WIN32
-
-static CRITICAL_SECTION g_cs;
-static int  g_cs_init = 0;
-static volatile LONG g_gen = 0;       // newest request id
-static LONG g_result_gen = -1;        // request id whose result is stored
-static LONG g_consumed_gen = -1;
-static char g_result[16384];
-static int  g_result_synced;
-
-typedef struct { LONG gen; char query[1280]; } FetchReq;
 
 static void url_encode(const char *s, char *out, int cap) {
     static const char *hex = "0123456789ABCDEF";
@@ -150,38 +139,6 @@ static void url_encode(const char *s, char *out, int cap) {
         else { out[o++] = '%'; out[o++] = hex[c >> 4]; out[o++] = hex[c & 15]; }
     }
     out[o] = 0;
-}
-
-static int http_get(const wchar_t *host, const wchar_t *path, char *out, int cap) {
-    int total = 0; out[0] = 0;
-    HINTERNET hS = WinHttpOpen(L"Timp/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-                               WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hS) return 0;
-    WinHttpSetTimeouts(hS, 5000, 5000, 5000, 10000);  // resolve/connect/send/receive
-    HINTERNET hC = WinHttpConnect(hS, host, INTERNET_DEFAULT_HTTPS_PORT, 0);
-    if (hC) {
-        HINTERNET hR = WinHttpOpenRequest(hC, L"GET", path, NULL, WINHTTP_NO_REFERER,
-                                          WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
-        if (hR) {
-            if (WinHttpSendRequest(hR, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
-                WinHttpReceiveResponse(hR, NULL)) {
-                DWORD avail;
-                do {
-                    avail = 0; WinHttpQueryDataAvailable(hR, &avail);
-                    if (avail) {
-                        if (total + (int)avail > cap - 1) avail = cap - 1 - total;
-                        DWORD rd = 0;
-                        if (avail > 0 && WinHttpReadData(hR, out + total, avail, &rd)) total += (int)rd;
-                    }
-                } while (avail > 0 && total < cap - 1);
-            }
-            WinHttpCloseHandle(hR);
-        }
-        WinHttpCloseHandle(hC);
-    }
-    WinHttpCloseHandle(hS);
-    out[total] = 0;
-    return total;
 }
 
 // Extract a JSON string value for `key` (handles \n \t \" \\ \/ \uXXXX). Returns
@@ -226,6 +183,50 @@ static bool json_str(const char *json, const char *key, char *out, int cap) {
     }
     out[o] = 0;
     return true;
+}
+
+#ifdef _WIN32
+
+static CRITICAL_SECTION g_cs;
+static int  g_cs_init = 0;
+static volatile LONG g_gen = 0;       // newest request id
+static LONG g_result_gen = -1;        // request id whose result is stored
+static LONG g_consumed_gen = -1;
+static char g_result[16384];
+static int  g_result_synced;
+
+typedef struct { LONG gen; char query[1280]; } FetchReq;
+
+static int http_get(const wchar_t *host, const wchar_t *path, char *out, int cap) {
+    int total = 0; out[0] = 0;
+    HINTERNET hS = WinHttpOpen(L"Timp/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                               WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hS) return 0;
+    WinHttpSetTimeouts(hS, 5000, 5000, 5000, 10000);  // resolve/connect/send/receive
+    HINTERNET hC = WinHttpConnect(hS, host, INTERNET_DEFAULT_HTTPS_PORT, 0);
+    if (hC) {
+        HINTERNET hR = WinHttpOpenRequest(hC, L"GET", path, NULL, WINHTTP_NO_REFERER,
+                                          WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+        if (hR) {
+            if (WinHttpSendRequest(hR, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+                WinHttpReceiveResponse(hR, NULL)) {
+                DWORD avail;
+                do {
+                    avail = 0; WinHttpQueryDataAvailable(hR, &avail);
+                    if (avail) {
+                        if (total + (int)avail > cap - 1) avail = cap - 1 - total;
+                        DWORD rd = 0;
+                        if (avail > 0 && WinHttpReadData(hR, out + total, avail, &rd)) total += (int)rd;
+                    }
+                } while (avail > 0 && total < cap - 1);
+            }
+            WinHttpCloseHandle(hR);
+        }
+        WinHttpCloseHandle(hC);
+    }
+    WinHttpCloseHandle(hS);
+    out[total] = 0;
+    return total;
 }
 
 static DWORD WINAPI fetch_thread(LPVOID arg) {
@@ -296,7 +297,120 @@ bool lyrics_fetch_poll(Lyrics *out) {
     return true;
 }
 
-#else
-void lyrics_fetch_start(const char *a, const char *t, const char *al, int d) { (void)a;(void)t;(void)al;(void)d; }
-bool lyrics_fetch_poll(Lyrics *out) { (void)out; return false; }
+#else  // ---- POSIX (macOS / Linux): libcurl + pthreads ----
+
+#include <pthread.h>
+#include <curl/curl.h>
+
+static pthread_mutex_t g_cs = PTHREAD_MUTEX_INITIALIZER;
+static pthread_once_t  g_curl_once = PTHREAD_ONCE_INIT;
+static long g_gen = 0;                // newest request id
+static long g_result_gen = -1;        // request id whose result is stored
+static long g_consumed_gen = -1;
+static char g_result[16384];
+static int  g_result_synced;
+
+typedef struct { long gen; char query[1280]; } FetchReq;
+
+static void curl_boot(void) { curl_global_init(CURL_GLOBAL_DEFAULT); }
+
+typedef struct { char *out; int cap; int len; } Sink;
+
+static size_t sink_write(void *data, size_t sz, size_t nm, void *ud) {
+    Sink *k = (Sink *)ud;
+    size_t total = sz * nm;
+    size_t room = (size_t)(k->cap - 1 - k->len);
+    size_t cp = total < room ? total : room;
+    if (cp) { memcpy(k->out + k->len, data, cp); k->len += (int)cp; }
+    return total;   // swallow the overflow instead of aborting the transfer
+}
+
+static int http_get(const char *url, char *out, int cap) {
+    Sink k = { out, cap, 0 };
+    out[0] = 0;
+    CURL *h = curl_easy_init();
+    if (!h) return 0;
+    curl_easy_setopt(h, CURLOPT_URL, url);
+    curl_easy_setopt(h, CURLOPT_USERAGENT, "Timp/1.0");
+    curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 5L);
+    curl_easy_setopt(h, CURLOPT_TIMEOUT, 10L);
+    curl_easy_setopt(h, CURLOPT_NOSIGNAL, 1L);   // threads: no SIGALRM timeouts
+    curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, sink_write);
+    curl_easy_setopt(h, CURLOPT_WRITEDATA, &k);
+    curl_easy_perform(h);
+    curl_easy_cleanup(h);
+    out[k.len] = 0;
+    return k.len;
+}
+
+static void *fetch_thread(void *arg) {
+    FetchReq *req = (FetchReq *)arg;
+    char url[2048];
+    snprintf(url, sizeof(url), "https://lrclib.net/api/get?%s", req->query);
+
+    char *body = (char *)malloc(1 << 17);  // 128 KB
+    if (!body) { free(req); return NULL; }
+    http_get(url, body, 1 << 17);
+
+    char text[16384]; int synced = 0; text[0] = 0;
+    if (json_str(body, "syncedLyrics", text, sizeof(text)) && text[0]) synced = 1;
+    else if (json_str(body, "plainLyrics", text, sizeof(text))) synced = 0;
+    else text[0] = 0;
+    free(body);
+
+    pthread_mutex_lock(&g_cs);
+    if (req->gen == g_gen) {  // still the most recent request
+        snprintf(g_result, sizeof(g_result), "%s", text);
+        g_result_synced = synced;
+        g_result_gen = req->gen;
+    }
+    pthread_mutex_unlock(&g_cs);
+    free(req);
+    return NULL;
+}
+
+void lyrics_fetch_start(const char *artist, const char *title, const char *album, int duration_sec) {
+    if (!title || !title[0]) return;
+    pthread_once(&g_curl_once, curl_boot);
+    pthread_mutex_lock(&g_cs);
+    long gen = ++g_gen;
+    pthread_mutex_unlock(&g_cs);
+    FetchReq *req = (FetchReq *)malloc(sizeof(FetchReq));
+    if (!req) return;
+    req->gen = gen;
+    char ea[512], et[512], el[512];
+    url_encode(artist ? artist : "", ea, sizeof(ea));
+    url_encode(title, et, sizeof(et));
+    url_encode(album ? album : "", el, sizeof(el));
+    snprintf(req->query, sizeof(req->query),
+             "artist_name=%s&track_name=%s&album_name=%s&duration=%d", ea, et, el, duration_sec);
+    pthread_t t;
+    if (pthread_create(&t, NULL, fetch_thread, req) == 0) pthread_detach(t);
+    else free(req);
+}
+
+bool lyrics_fetch_poll(Lyrics *out) {
+    char local[16384]; int synced = 0; bool fresh = false;
+    pthread_mutex_lock(&g_cs);
+    if (g_result_gen == g_gen && g_result_gen != g_consumed_gen) {
+        g_consumed_gen = g_result_gen;
+        memcpy(local, g_result, sizeof(local));
+        synced = g_result_synced;
+        fresh = true;
+    }
+    pthread_mutex_unlock(&g_cs);
+    if (!fresh) return false;
+
+    memset(out, 0, sizeof(*out));
+    if (local[0]) {
+        if (synced) {
+            each_line(local, lrc_line, out);
+            if (out->synced && out->count > 0) qsort(out->lines, out->count, sizeof(LrcLine), cmp_line);
+            else { memset(out, 0, sizeof(*out)); each_line(local, txt_line, out); }
+        } else each_line(local, txt_line, out);
+    }
+    return true;
+}
+
 #endif

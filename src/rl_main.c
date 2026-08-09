@@ -437,14 +437,45 @@ static void ic_repeat(float cx, float cy, float r, Color c) {
     DrawTriangle((Vector2){ cx + r * 0.95f, cy - r * 0.75f }, (Vector2){ cx + r * 0.35f, cy - r * 0.55f }, (Vector2){ cx + r * 0.95f, cy + r * 0.05f }, c);
 }
 
+#ifdef _WIN32
 // Declared by hand (windows.h clashes with raylib names); lives in shell32.
 __declspec(dllimport) long __stdcall SetCurrentProcessExplicitAppUserModelID(const wchar_t *app_id);
+#endif
+
+// Platform UI fonts — Segoe UI on Windows; SF Pro for text on macOS (the
+// variable SFNS.ttf loads at its Regular default, so the semibold title falls
+// back to Arial Bold, the closest glyf-outline weight stb_truetype can read);
+// DejaVu on Linux. First existing candidate wins.
+#ifdef _WIN32
+static const char *UI_SEMIBOLD[] = { "C:/Windows/Fonts/seguisb.ttf" };
+static const char *UI_REGULAR[]  = { "C:/Windows/Fonts/segoeui.ttf" };
+#elif defined(__APPLE__)
+static const char *UI_SEMIBOLD[] = { "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+                                     "/System/Library/Fonts/Supplemental/Tahoma Bold.ttf",
+                                     "/System/Library/Fonts/Supplemental/Trebuchet MS Bold.ttf" };
+static const char *UI_REGULAR[]  = { "/System/Library/Fonts/SFNS.ttf",
+                                     "/System/Library/Fonts/Supplemental/Arial.ttf",
+                                     "/System/Library/Fonts/Supplemental/Tahoma.ttf" };
+#else
+static const char *UI_SEMIBOLD[] = { "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                                     "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf" };
+static const char *UI_REGULAR[]  = { "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                                     "/usr/share/fonts/TTF/DejaVuSans.ttf" };
+#endif
+
+static Font load_ui_font(const char **cands, int n, int px, int *cps, int cpc) {
+    for (int i = 0; i < n; i++)
+        if (FileExists(cands[i])) return LoadFontEx(cands[i], px, cps, cpc);
+    return LoadFontEx(cands[0], px, cps, cpc);   // missing everywhere → raylib default
+}
 
 int main(int argc, char **argv) {
+#ifdef _WIN32
     // Stable taskbar identity. Without it the Win11 taskbar keys the app by exe
     // path and can serve a stale cached icon from whatever lived there before
     // (the pre-raylib Timp had no embedded icon at all → blank taskbar icon).
     SetCurrentProcessExplicitAppUserModelID(L"Fezcode.Timp");
+#endif
 
     // Decode the real Unicode args (Windows argv is ANSI — Turkish "İ"/"ı" etc.
     // arrive mangled and fail to open). args[0] is the program, args[1..] paths.
@@ -460,6 +491,7 @@ int main(int argc, char **argv) {
         return 0;
     }
     singleinst_listen_start();
+    os_open_files_handler_install();   // Finder "Open With" → the same queue
 
     playlist_init(&g_pl);
     SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_UNDECORATED);
@@ -479,10 +511,12 @@ int main(int argc, char **argv) {
     static const int extra[] = { 0x2026, 0x2022, 0x2013, 0x2014, 0x2018, 0x2019, 0x201C, 0x201D };
     for (unsigned i = 0; i < sizeof(extra) / sizeof(extra[0]); i++) cps[cpc++] = extra[i];
 
-    fTitle = LoadFontEx("C:/Windows/Fonts/seguisb.ttf", 30 * SS, cps, cpc);
-    fMeta  = LoadFontEx("C:/Windows/Fonts/segoeui.ttf", 16 * SS, cps, cpc);
-    fSmall = LoadFontEx("C:/Windows/Fonts/segoeui.ttf", 14 * SS, cps, cpc);
-    fEye   = LoadFontEx("C:/Windows/Fonts/segoeui.ttf", 12 * SS, cps, cpc);
+    const int nsb = (int)(sizeof(UI_SEMIBOLD) / sizeof(UI_SEMIBOLD[0]));
+    const int nrg = (int)(sizeof(UI_REGULAR) / sizeof(UI_REGULAR[0]));
+    fTitle = load_ui_font(UI_SEMIBOLD, nsb, 30 * SS, cps, cpc);
+    fMeta  = load_ui_font(UI_REGULAR,  nrg, 16 * SS, cps, cpc);
+    fSmall = load_ui_font(UI_REGULAR,  nrg, 14 * SS, cps, cpc);
+    fEye   = load_ui_font(UI_REGULAR,  nrg, 12 * SS, cps, cpc);
     SetTextureFilter(fTitle.texture, TEXTURE_FILTER_BILINEAR);
     SetTextureFilter(fMeta.texture,  TEXTURE_FILTER_BILINEAR);
     SetTextureFilter(fSmall.texture, TEXTURE_FILTER_BILINEAR);

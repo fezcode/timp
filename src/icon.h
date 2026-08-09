@@ -9,6 +9,7 @@
 #define TIMP_ICON_H
 
 #include <stdint.h>
+#include <stddef.h>
 #include <math.h>
 
 // palette sampled from the app itself (examples/main.png)
