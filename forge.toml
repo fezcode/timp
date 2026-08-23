@@ -1,6 +1,6 @@
-﻿[app]
+[app]
 name    = "Timp"
-version = "0.10.2"
+version = "0.10.3"
 id      = "io.timp.timp"
 icon    = "assets/timp.ico"
 
@@ -15,15 +15,15 @@ window_title = "Timp Setup"
 [install]
 default_dir = "${PROGRAMFILES}/Timp"
 
-# Settings live in %APPDATA%\Timp (outside the install dir), so uninstall
+# Settings live in %APPDATA%\fezcode\Timp (outside the install dir), so uninstall
 # never touches them â€” nothing to keep here.
 [uninstall]
 keep = []
 
 [[steps]]
 type  = "welcome"
-title = "Timp 0.10.2"
-body  = "This wizard will install Timp 0.10.2 on your computer.\n\nTimp is a small, native, album-art music player.\n\nClick Next to continue."
+title = "Timp 0.10.3"
+body  = "This wizard will install Timp 0.10.3 on your computer.\n\nTimp is a small, native, album-art music player.\n\nClick Next to continue."
 
 [[steps]]
 type  = "license"
@@ -34,7 +34,7 @@ file  = "LICENSE.txt"
 [[steps]]
 type  = "folder"
 title = "Select Folder"
-body  = "Choose where to install Timp 0.10.2."
+body  = "Choose where to install Timp 0.10.3."
 
 [[steps]]
 type  = "shortcuts"
@@ -91,4 +91,4 @@ data  = "${INSTALLDIR}"
 hive  = "HKLM"
 key   = "Software\\Timp\\Timp"
 value = "Version"
-data  = "0.10.2"
+data  = "0.10.3"

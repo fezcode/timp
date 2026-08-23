@@ -6,19 +6,40 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <sys/stat.h>
+#include <sys/types.h>
 #endif
 
+// Data home: %APPDATA%\fezcode\Timp — one Fezcode-owned tree for every app in
+// the suite. config.ini and Playlists\ both live here. macOS mirrors it at
+// ~/Library/Application Support/fezcode/Timp/, other Unix at ~/.config/fezcode/Timp/.
 void rlconfig_data_dir(char *out, int cap) {
 #ifdef _WIN32
     const char *appdata = getenv("APPDATA");
     if (appdata && *appdata) {
-        snprintf(out, cap, "%s\\Timp", appdata);
+        char parent[512];
+        snprintf(parent, sizeof(parent), "%s\\fezcode", appdata);
+        CreateDirectoryA(parent, NULL);              // parent first — no mkdir -p on Win32
+        snprintf(out, cap, "%s\\fezcode\\Timp", appdata);
         CreateDirectoryA(out, NULL);
     } else snprintf(out, cap, ".");
 #else
+    char base[512];
+  #ifdef __APPLE__
     const char *home = getenv("HOME");
-    if (home && *home) snprintf(out, cap, "%s/.timp", home);
-    else snprintf(out, cap, ".");
+    if (!home || !*home) { snprintf(out, cap, "."); return; }
+    snprintf(base, sizeof(base), "%s/Library/Application Support", home);
+  #else
+    const char *xdg  = getenv("XDG_CONFIG_HOME");
+    const char *home = getenv("HOME");
+    if (xdg && *xdg)        snprintf(base, sizeof(base), "%s", xdg);
+    else if (home && *home) snprintf(base, sizeof(base), "%s/.config", home);
+    else { snprintf(out, cap, "."); return; }
+  #endif
+    char parent[600];
+    snprintf(parent, sizeof(parent), "%s/fezcode", base); mkdir(parent, 0755);
+    snprintf(out, cap, "%s/fezcode/Timp", base);          mkdir(out, 0755);
 #endif
 }
 

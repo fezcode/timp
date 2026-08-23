@@ -19,8 +19,8 @@ void rlconfig_defaults(RlConfig *c);
 bool rlconfig_load(RlConfig *c);
 bool rlconfig_save(const RlConfig *c);
 
-// Absolute path of the per-user data folder (Windows: %APPDATA%\Timp), creating
-// it if needed. config.ini and the Playlists\ folder both live here.
+// Absolute path of the per-user data folder (Windows: %APPDATA%\fezcode\Timp),
+// creating it if needed. config.ini and the Playlists\ folder both live here.
 void rlconfig_data_dir(char *out, int cap);
 
 #endif
