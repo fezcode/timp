@@ -18,7 +18,8 @@ default_dir = "${PROGRAMFILES}/Timp"
 # Settings live in %APPDATA%\fezcode\Timp (outside the install dir), so uninstall
 # never touches them â€” nothing to keep here.
 [uninstall]
-keep = []
+keep          = []
+settings_dirs = ["${APPDATA}/fezcode/Timp"]     # offered as "Also remove my settings and data"
 
 [[steps]]
 type  = "welcome"
