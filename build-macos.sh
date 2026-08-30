@@ -20,7 +20,7 @@ LIBS="$(pkg-config --libs raylib) -lcurl -lm -lpthread \
       -framework Cocoa -framework MediaPlayer -framework UniformTypeIdentifiers"
 
 mkdir -p build
-SRCS="rl_main audio art osdialog tags lyrics rlconfig mediakeys singleinst fft eq playlist playlistio vendor_ma"
+SRCS="rl_main audio art osdialog tags lyrics rlconfig mediakeys singleinst fft eq playlist playlistio vendor_ma menubar"
 OBJC_SRCS="osdialog_mac mediakeys_mac"
 
 OBJS=""

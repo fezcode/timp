@@ -15,6 +15,7 @@
 #include "rlconfig.h"
 #include "mediakeys.h"
 #include "singleinst.h"
+#include "menubar.h"
 #include "icon.h"
 
 #include <math.h>
@@ -31,7 +32,7 @@
 #define ARTS (WW - 2 * PAD)
 #define DRAWER_W 320           // playlist drawer width (logical px); window grows by this
 #define WMAXW (WW + DRAWER_W)  // render target width covers player + drawer
-#define TIMP_VERSION "0.10.3"  // keep in sync with forge.toml
+#define TIMP_VERSION "0.11.0"  // keep in sync with forge.toml
 
 // ---------- palette ----------
 static const Color BG0 = { 24, 21, 17, 255 };
@@ -80,6 +81,10 @@ static int      *g_filt = NULL;         // visible row → playlist index (tab 0
 static int       g_filt_cap = 0;
 static float     g_bars[64], g_peaks[64];
 static const int NBARS = 48;
+static bool      g_aot = false;           // always on top (persisted)
+static bool      g_quit = false;          // the Hisashi menu's Quit; leaves the main loop like the × button
+static bool      g_hisashi_menubar = true;  // publish the menus to Hisashi's menubar (persisted)
+static char      g_data_dir[600];         // %APPDATA%\fezcode\Timp (config + Playlists)
 static Font fTitle, fMeta, fSmall, fEye;
 
 // hover animation values
@@ -265,6 +270,57 @@ static void drawer_save(const char *name) {
         playlist_set_name(&g_pl, name);
         playlist_mark_clean(&g_pl);
     }
+}
+
+// ---------- Hisashi menubar (hoswl) ----------
+// Timp has no menu bar of its own; Hisashi's menubar gets one from menubar.c.
+// Item ids are defined there. Runs from the main loop (menubar_frame), so every
+// action below is the same code the keyboard / buttons run.
+static void menu_click(const char *id) {
+    if (g_naming || g_confirm_overwrite) return;   // a modal owns the input; Hisashi has already raised our window
+    bool loaded = g_audio && audio_is_loaded(g_audio);
+    bool playing = g_audio && audio_is_playing(g_audio);
+    int n;
+    #define IS(s) (strcmp(id, s) == 0)
+    if      (IS("file.open"))     open_dialog();
+    else if (IS("file.save")) {
+        if (playlist_dirty(&g_pl) && playlist_count(&g_pl) > 0) {
+            g_show_queue = true; if (g_drawer_view == 1) g_drawer_view = 0;   // the name prompt lives in the drawer
+            if (playlist_name(&g_pl)[0]) { snprintf(g_name_buf, sizeof(g_name_buf), "%s", playlist_name(&g_pl)); g_confirm_overwrite = true; }
+            else { g_naming = true; g_name_buf[0] = 0; }
+        }
+    }
+    else if (IS("file.library"))  { g_show_queue = true; g_saved_count = playlistio_list(g_saved_names, PL_MAX_SAVED); g_drawer_view = 1; g_queue_scroll = 0; g_search_focus = false; }
+    else if (IS("file.clear"))    { if (playlist_count(&g_pl) > 0) { playlist_clear(&g_pl); reset_now_playing(); g_queue_scroll = 0; g_search[0] = 0; } }
+    else if (IS("file.folder"))   os_reveal_dir(g_data_dir);
+    else if (IS("file.quit"))     g_quit = true;
+    else if (IS("pb.toggle"))     { if (loaded) { if (playing) audio_pause(g_audio); else audio_play(g_audio); } }
+    else if (IS("pb.stop"))       { if (loaded) audio_stop(g_audio); }
+    else if (IS("pb.prev"))       do_prev();
+    else if (IS("pb.next"))       { if (playlist_has_next(&g_pl)) load_file(playlist_next(&g_pl)); }
+    else if (IS("pb.back"))       { if (loaded) audio_seek_seconds(g_audio, audio_position_seconds(g_audio) - 5); }
+    else if (IS("pb.fwd"))        { if (loaded) audio_seek_seconds(g_audio, audio_position_seconds(g_audio) + 5); }
+    else if (IS("pb.shuffle"))    playlist_set_shuffle(&g_pl, !playlist_shuffle(&g_pl));
+    else if (sscanf(id, "repeat.%d", &n) == 1) { if (n >= 0 && n < 3) { g_repeat = n; playlist_set_loop(&g_pl, g_repeat == 2); } }
+    else if (IS("audio.up"))      { if (g_audio) audio_set_volume(g_audio, audio_get_volume(g_audio) + 0.05f); }
+    else if (IS("audio.down"))    { if (g_audio) audio_set_volume(g_audio, audio_get_volume(g_audio) - 0.05f); }
+    else if (IS("audio.mute")) {
+        if (g_audio) {
+            if (audio_get_volume(g_audio) > 0.001f) { g_premute = audio_get_volume(g_audio); audio_set_volume(g_audio, 0); }
+            else audio_set_volume(g_audio, g_premute);
+        }
+    }
+    else if (IS("audio.eq"))      { if (g_audio) { Eq *e = audio_get_eq(g_audio); eq_set_enabled(e, !eq_is_enabled(e)); } }
+    else if (IS("audio.eqflat"))  { if (g_audio) eq_flat(audio_get_eq(g_audio)); }
+    else if (IS("audio.eqpanel")) { g_show_eq = !g_show_eq; if (g_show_eq) { g_show_settings = g_show_lyrics = false; } }
+    else if (sscanf(id, "viz.%d", &n) == 1) { if (n >= 0 && n < 3) g_art_mode = n; }
+    else if (IS("view.drawer"))   { g_show_queue = !g_show_queue; if (g_show_queue) { if (g_drawer_view == 1) g_drawer_view = 0; } else { g_naming = false; g_confirm_overwrite = false; } }
+    else if (IS("view.lyrics"))   { g_show_lyrics = !g_show_lyrics; if (g_show_lyrics) { g_show_eq = g_show_settings = false; } }
+    else if (IS("view.settings") || IS("help.about")) { g_show_settings = !g_show_settings; if (g_show_settings) { g_show_eq = g_show_lyrics = false; } }
+    else if (IS("view.aot"))      { g_aot = !g_aot; if (g_aot) SetWindowState(FLAG_WINDOW_TOPMOST); else ClearWindowState(FLAG_WINDOW_TOPMOST); }
+    else if (sscanf(id, "side.%d", &n) == 1) { if (n == 0 || n == 1) g_side = n; }
+    else if (sscanf(id, "prev.%d", &n) == 1) { if (n == 0 || n == 1) g_prev_mode = n; }
+    #undef IS
 }
 
 // ---------- drawer search + layout ----------
@@ -546,9 +602,12 @@ int main(int argc, char **argv) {
 
     // restore persisted settings
     RlConfig cfg; rlconfig_load(&cfg);
-    bool g_aot = cfg.always_on_top;
+    g_aot = cfg.always_on_top;
     g_side = (cfg.playlist_side == 1) ? 1 : 0;
     g_prev_mode = (cfg.prev_mode == 1) ? 1 : 0;
+    g_hisashi_menubar = cfg.hisashi_menubar;
+    menubar_init(TIMP_VERSION);
+    menubar_set_enabled(g_hisashi_menubar);
     if (g_audio) {
         audio_set_volume(g_audio, cfg.volume);
         Eq *e0 = audio_get_eq(g_audio);
@@ -581,9 +640,9 @@ int main(int argc, char **argv) {
     // The window's closed top-left; the drawer grows the window from here.
     { Vector2 wp0 = GetWindowPosition(); g_base_x = (int)wp0.x; g_base_y = (int)wp0.y; }
 
-    char dataDir[600]; rlconfig_data_dir(dataDir, sizeof(dataDir));   // %APPDATA%\fezcode\Timp (config + Playlists)
+    char *dataDir = g_data_dir; rlconfig_data_dir(g_data_dir, sizeof g_data_dir);   // %APPDATA%\fezcode\Timp (config + Playlists)
 
-    while (!WindowShouldClose()) {
+    while (!WindowShouldClose() && !g_quit) {
         float dt = GetFrameTime();
         // ---- drawer slide + window geometry ----
         g_drawer_anim = approach(g_drawer_anim, g_show_queue ? 1.0f : 0.0f, dt);
@@ -613,6 +672,18 @@ int main(int argc, char **argv) {
             default: break;
         }
         if (lyrics_fetch_poll(&g_lyrics)) g_lyrics_fetching = false;
+        // ---- Hisashi menubar: publish the current state, run any clicks ----
+        { MenubarState ms = { 0 };
+          ms.loaded = loaded; ms.playing = playing;
+          ms.has_next = playlist_has_next(&g_pl); ms.has_prev = playlist_has_prev(&g_pl);
+          ms.shuffle = playlist_shuffle(&g_pl); ms.repeat = g_repeat; ms.art_mode = g_art_mode;
+          ms.drawer_open = g_show_queue; ms.drawer_view = g_drawer_view;
+          ms.eq_on = g_audio && eq_is_enabled(audio_get_eq(g_audio)); ms.eq_panel = g_show_eq;
+          ms.settings_open = g_show_settings; ms.lyrics_open = g_show_lyrics;
+          ms.aot = g_aot; ms.side = g_side; ms.prev_mode = g_prev_mode;
+          ms.muted = g_audio && audio_get_volume(g_audio) <= 0.001f;
+          ms.playlist_dirty = playlist_dirty(&g_pl); ms.qcount = playlist_count(&g_pl);
+          menubar_frame(&ms, menu_click); }
         // songs forwarded from a second launch → append to the queue and play the
         // first newly-added one (single-instance "append & play").
         {
@@ -758,10 +829,10 @@ int main(int argc, char **argv) {
             else if (CheckCollisionPointRec(mp, setR)) { g_show_settings = !g_show_settings; if (g_show_settings) { g_show_eq = g_show_lyrics = false; } }
             else if (CheckCollisionPointRec(mp, lyrR)) { g_show_lyrics = !g_show_lyrics; if (g_show_lyrics) { g_show_eq = g_show_settings = false; } }
             else if (g_show_settings && CheckCollisionPointRec(mp, artR)) {
-                int ry0 = (int)artR.y + 50, rowH = 35;
+                int ry0 = (int)artR.y + 50, rowH = 31;   // 7 rows must clear the DATA FOLDER block at +268
                 int row = ((int)mp.y - ry0) / rowH;
                 Rectangle foldBtn = { artR.x + 20, artR.y + 308, 130, 26 };
-                if ((int)mp.y >= ry0 && row >= 0 && row < 6) {
+                if ((int)mp.y >= ry0 && row >= 0 && row < 7) {
                     if (row == 0) { g_aot = !g_aot; if (g_aot) SetWindowState(FLAG_WINDOW_TOPMOST); else ClearWindowState(FLAG_WINDOW_TOPMOST); }
                     else if (row == 1) playlist_set_shuffle(&g_pl, !playlist_shuffle(&g_pl));
                     else if (row == 2) { g_repeat = (g_repeat + 1) % 3; playlist_set_loop(&g_pl, g_repeat == 2); }
@@ -771,6 +842,7 @@ int main(int argc, char **argv) {
                         if (audio_get_volume(g_audio) > 0.001f) { g_premute = audio_get_volume(g_audio); audio_set_volume(g_audio, 0); }
                         else audio_set_volume(g_audio, g_premute);
                     }
+                    else if (row == 6) { g_hisashi_menubar = !g_hisashi_menubar; menubar_set_enabled(g_hisashi_menubar); }
                 }
                 else if (CheckCollisionPointRec(mp, foldBtn)) os_reveal_dir(dataDir);
             }
@@ -1252,10 +1324,11 @@ int main(int argc, char **argv) {
         } else if (g_show_settings) {
             rrBox(artR, 0.05f, CARDBG, (Color){ 255, 255, 255, 14 });
             DrawTextEx(fEye, "SETTINGS", (Vector2){ artR.x + 16, artR.y + 16 }, 12, 3.0f, alpha(g_accent, 205));
-            const char *labels[6] = { "Always on top", "Shuffle", "Repeat", "Playlist side", "Prev button", "Mute" };
-            bool st[6] = { g_aot, playlist_shuffle(&g_pl), playlist_loop(&g_pl), false, false, g_audio ? audio_get_volume(g_audio) <= 0.001f : false };
-            int ry0 = (int)artR.y + 50, rowH = 35;
-            for (int i = 0; i < 6; i++) {
+            const char *labels[7] = { "Always on top", "Shuffle", "Repeat", "Playlist side", "Prev button", "Mute", "Hisashi menubar" };
+            bool st[7] = { g_aot, playlist_shuffle(&g_pl), playlist_loop(&g_pl), false, false, g_audio ? audio_get_volume(g_audio) <= 0.001f : false,
+                           g_hisashi_menubar };
+            int ry0 = (int)artR.y + 50, rowH = 31;   // 7 rows must clear the DATA FOLDER block at +268
+            for (int i = 0; i < 7; i++) {
                 float ry = (float)(ry0 + i * rowH);
                 bool hov = CheckCollisionPointRec(mp, (Rectangle){ artR.x, ry, artR.width, (float)rowH });
                 if (hov) DrawRectangleRounded((Rectangle){ artR.x + 6, ry, artR.width - 12, (float)rowH - 8 }, 0.3f, 6, (Color){ 255, 255, 255, 10 });
@@ -1476,8 +1549,10 @@ int main(int argc, char **argv) {
     save.always_on_top = g_aot;
     save.playlist_side = g_side;
     save.prev_mode = g_prev_mode;
+    save.hisashi_menubar = g_hisashi_menubar;
     save.win_x = g_base_x; save.win_y = g_base_y; save.has_win_pos = true;   // closed-window anchor
     rlconfig_save(&save);
+    menubar_shutdown();   // "bye" to Hisashi
 
     UnloadRenderTexture(target);
     if (g_has_cover) UnloadTexture(g_cover);

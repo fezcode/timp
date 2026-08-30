@@ -46,6 +46,11 @@ Finder "Open With" support.
   (UTF-8 / UTF-16, full Latin + Turkish glyph coverage)
 - **System integration** — system-wide media keys, always-on-top, and a
   procedurally-drawn app/taskbar icon
+- **Hisashi menubar** (Windows) — with [Hisashi](https://github.com/fezcode/hisashi) running,
+  Timp gets a macOS-style File / Playback / Audio / View / Help menu in the bar with live
+  checkmarks — every key and button action, plus the playlist library and visualizer
+  modes. Speaks the tiny [hoswl](https://github.com/fezcode/hisashi/blob/main/docs/hoswl-protocol.md)
+  named-pipe protocol; toggle in Settings
 - **Persistent settings** — volume, EQ, always-on-top, playlist side, and window
   position are saved to `%APPDATA%\Timp\config.ini`
 - **Polished window** — borderless with anti-aliased, rounded corners (Win11
