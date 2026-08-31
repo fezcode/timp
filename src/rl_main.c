@@ -32,7 +32,7 @@
 #define ARTS (WW - 2 * PAD)
 #define DRAWER_W 320           // playlist drawer width (logical px); window grows by this
 #define WMAXW (WW + DRAWER_W)  // render target width covers player + drawer
-#define TIMP_VERSION "0.11.0"  // keep in sync with forge.toml
+#define TIMP_VERSION "0.12.0"  // keep in sync with forge.toml
 
 // ---------- palette ----------
 static const Color BG0 = { 24, 21, 17, 255 };
@@ -49,6 +49,7 @@ static bool      g_has_cover = false;
 static Color     g_accent = { 201, 164, 90, 255 };
 static char      g_title[256] = "Drop a track to begin";
 static char      g_meta[256]  = "";   // sized to match Tags.artist (avoids snprintf truncation)
+static char      g_album[256] = "";   // published to the OS now-playing session only
 static char      g_fmt[32]    = "";
 static Playlist  g_pl;
 static bool      g_show_queue = false;
@@ -185,15 +186,8 @@ static void make_cover(const char *path) {
     g_accent = ColorFromHSV(hue, 0.42f, 0.84f);
 }
 static bool dir_cover_rgba(const char *path, unsigned char **rgba, int *w, int *h) {
-    char dir[700]; snprintf(dir, sizeof(dir), "%s", path);
-    char *a = strrchr(dir, '/'), *b = strrchr(dir, '\\'), *s = (b > a) ? b : a;
-    if (!s) return false;
-    *s = 0;
-    static const char *pref[] = { "cover.jpg", "cover.png", "folder.jpg", "folder.png", "front.jpg",
-                                  "front.png", "Cover.jpg", "Folder.jpg", "AlbumArt.jpg", "album.jpg", NULL };
     char cand[800];
-    for (int i = 0; pref[i]; i++) { snprintf(cand, sizeof(cand), "%s/%s", dir, pref[i]); if (art_decode_file(cand, rgba, w, h)) return true; }
-    return false;
+    return art_find_dir_cover(path, cand, (int)sizeof(cand)) && art_decode_file(cand, rgba, w, h);
 }
 static void set_cover(const char *path) {
     if (g_has_cover) { UnloadTexture(g_cover); g_has_cover = false; }
@@ -221,17 +215,20 @@ static void set_meta_from_path(const char *path) {
     if (tags_read(path, &tg) && tg.title[0]) {
         snprintf(g_title, sizeof(g_title), "%s", tg.title);
         snprintf(g_meta, sizeof(g_meta), "%s", tg.artist);
+        snprintf(g_album, sizeof(g_album), "%s", tg.album);
     } else {
         snprintf(g_title, sizeof(g_title), "%s", name);
         char *d = strrchr(g_title, '.'); if (d) *d = 0;
         for (char *p = g_title; *p; p++) if (*p == '_') *p = ' ';
         g_meta[0] = 0;
+        g_album[0] = 0;
     }
 }
 static void reset_now_playing(void) {
     if (g_audio) audio_unload(g_audio);
     snprintf(g_title, sizeof(g_title), "Drop a track to begin");
-    g_meta[0] = 0; g_fmt[0] = 0;
+    g_meta[0] = 0; g_fmt[0] = 0; g_album[0] = 0;
+    mediakeys_now_playing(NULL, NULL, NULL, NULL);
     g_lyrics.count = 0; g_lyrics.synced = false;
     g_accent = (Color){ 201, 164, 90, 255 };
     if (g_has_cover) { UnloadTexture(g_cover); g_has_cover = false; }
@@ -241,12 +238,16 @@ static void load_file(const char *path) {
     if (!path || !g_audio) return;
     if (audio_load(g_audio, path)) {
         audio_play(g_audio); set_meta_from_path(path); set_cover(path);
+        mediakeys_now_playing(g_title, g_meta, g_album, path);
         lyrics_load(path, &g_lyrics); g_lyrics_scroll = 0; g_lyrics_fetching = false;
         if (g_lyrics.count == 0) {  // no local lyrics → try lrclib.net in the background
             lyrics_fetch_start(g_meta, g_title, "", (int)audio_length_seconds(g_audio));
             g_lyrics_fetching = true;
         }
-    } else snprintf(g_title, sizeof(g_title), "Can't open file");
+    } else {
+        snprintf(g_title, sizeof(g_title), "Can't open file");
+        mediakeys_now_playing(NULL, NULL, NULL, NULL);   // don't leave the OS on the old track
+    }
 }
 // Prev action shared by the on-screen button and the system media key.
 // Smart mode (Spotify-like): once past the first 5s, prev restarts the current
@@ -598,7 +599,7 @@ int main(int argc, char **argv) {
         for (int i = 0; i < n; i++) UnloadImage(icons[i]);
     }
 
-    mediakeys_start();
+    mediakeys_start(GetWindowHandle());
 
     // restore persisted settings
     RlConfig cfg; rlconfig_load(&cfg);
@@ -666,6 +667,8 @@ int main(int argc, char **argv) {
         // system-wide media keys
         switch (mediakeys_poll()) {
             case MK_PLAYPAUSE: if (loaded) { if (playing) audio_pause(g_audio); else audio_play(g_audio); } break;
+            case MK_PLAY:      if (loaded && !playing) audio_play(g_audio); break;
+            case MK_PAUSE:     if (loaded && playing) audio_pause(g_audio); break;
             case MK_STOP:      if (loaded) audio_stop(g_audio); break;
             case MK_PREV:      do_prev(); break;
             case MK_NEXT:      if (playlist_has_next(&g_pl)) load_file(playlist_next(&g_pl)); break;
@@ -1533,6 +1536,13 @@ int main(int argc, char **argv) {
                        (Rectangle){ 0, 0, (float)curW, (float)WH }, (Vector2){ 0, 0 }, 0, WHITE);
         EndDrawing();
 
+        // Publish where we are to the OS now-playing session (cheap: the backend
+        // only forwards what actually changed).
+        { bool ld = g_audio && audio_is_loaded(g_audio), pl = g_audio && audio_is_playing(g_audio);
+          mediakeys_set_state(!ld ? MK_STOPPED : (pl ? MK_PLAYING : MK_PAUSED));
+          mediakeys_set_timeline(ld ? audio_position_seconds(g_audio) : 0,
+                                 ld ? audio_length_seconds(g_audio) : 0); }
+
         frame++;
         if (shot_frame > 0 && frame == shot_frame) TakeScreenshot("rl_shot.png");
         if (shot_frame > 0 && frame == shot_frame + 3) break;
@@ -1553,6 +1563,7 @@ int main(int argc, char **argv) {
     save.win_x = g_base_x; save.win_y = g_base_y; save.has_win_pos = true;   // closed-window anchor
     rlconfig_save(&save);
     menubar_shutdown();   // "bye" to Hisashi
+    mediakeys_shutdown();
 
     UnloadRenderTexture(target);
     if (g_has_cover) UnloadTexture(g_cover);

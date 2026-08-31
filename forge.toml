@@ -1,6 +1,6 @@
 [app]
 name    = "Timp"
-version = "0.11.0"
+version = "0.12.0"
 id      = "io.timp.timp"
 icon    = "assets/timp.ico"
 
@@ -23,8 +23,8 @@ settings_dirs = ["${APPDATA}/fezcode/Timp"]     # offered as "Also remove my set
 
 [[steps]]
 type  = "welcome"
-title = "Timp 0.11.0"
-body  = "This wizard will install Timp 0.11.0 on your computer.\n\nTimp is a small, native, album-art music player.\n\nClick Next to continue."
+title = "Timp 0.12.0"
+body  = "This wizard will install Timp 0.12.0 on your computer.\n\nTimp is a small, native, album-art music player.\n\nClick Next to continue."
 
 [[steps]]
 type  = "license"
@@ -35,7 +35,7 @@ file  = "LICENSE.txt"
 [[steps]]
 type  = "folder"
 title = "Select Folder"
-body  = "Choose where to install Timp 0.11.0."
+body  = "Choose where to install Timp 0.12.0."
 
 [[steps]]
 type  = "shortcuts"
@@ -92,4 +92,4 @@ data  = "${INSTALLDIR}"
 hive  = "HKLM"
 key   = "Software\\Timp\\Timp"
 value = "Version"
-data  = "0.11.0"
+data  = "0.12.0"

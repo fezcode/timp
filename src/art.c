@@ -125,16 +125,21 @@ static bool extract_flac(FILE *f, unsigned char **od, int *os) {
     return false;
 }
 
-bool art_load_rgba(const char *path, unsigned char **rgba, int *w, int *h) {
-    *rgba = NULL;
+bool art_load_encoded(const char *path, unsigned char **data, int *size) {
+    *data = NULL; *size = 0;
     FILE *f = open_rb(path);
     if (!f) return false;
+    bool ok = extract_id3(f, data, size);
+    if (!ok) ok = extract_flac(f, data, size);
+    fclose(f);
+    return ok && *data;
+}
+
+bool art_load_rgba(const char *path, unsigned char **rgba, int *w, int *h) {
+    *rgba = NULL;
     unsigned char *enc = NULL;
     int enc_size = 0;
-    bool ok = extract_id3(f, &enc, &enc_size);
-    if (!ok) ok = extract_flac(f, &enc, &enc_size);
-    fclose(f);
-    if (!ok || !enc) return false;
+    if (!art_load_encoded(path, &enc, &enc_size)) return false;
 
     int comp = 0;
     unsigned char *px = stbi_load_from_memory(enc, enc_size, w, h, &comp, 4);
@@ -162,4 +167,22 @@ bool art_decode_file(const char *path, unsigned char **rgba, int *w, int *h) {
     if (!px) return false;
     *rgba = px;
     return true;
+}
+
+bool art_find_dir_cover(const char *path, char *out, int outsz) {
+    char dir[700];
+    snprintf(dir, sizeof(dir), "%s", path);
+    char *a = strrchr(dir, '/'), *b = strrchr(dir, '\\'), *s = (b > a) ? b : a;
+    if (!s) return false;
+    *s = 0;
+    // Case variants matter on case-sensitive filesystems (macOS/Linux builds).
+    static const char *pref[] = { "cover.jpg", "cover.png", "folder.jpg", "folder.png", "front.jpg",
+                                  "front.png", "Cover.jpg", "Folder.jpg", "AlbumArt.jpg", "album.jpg", NULL };
+    for (int i = 0; pref[i]; i++) {
+        snprintf(out, (size_t)outsz, "%s/%s", dir, pref[i]);
+        FILE *f = open_rb(out);
+        if (f) { fclose(f); return true; }
+    }
+    out[0] = 0;
+    return false;
 }
