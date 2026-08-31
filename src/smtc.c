@@ -460,10 +460,12 @@ static DWORD WINAPI smtc_thread(LPVOID param) {
     return 0;
 }
 
-// Windows labels our media session by resolving the process AppUserModelID to a
-// registered app; with nothing registered for ours it just prints the raw id
-// ("Fezcode.Timp"). This is the documented desktop-app registration that gives
-// the id a real display name. The id is read back from the process rather than
+// Windows labels our media session by resolving the process AppUserModelID
+// through the shell's app list, which knows a desktop app by the id on its
+// Start Menu shortcut — forge.toml stamps ours (app_id) so the overlay says
+// "Timp" rather than the raw "Fezcode.Timp". This key is the notification
+// platform's registration for unpackaged apps (display name for toasts); it
+// does not feed the overlay. The id is read back from the process rather than
 // spelled out again here, so it cannot drift from the one main() sets. The key
 // is listed in forge.toml [uninstall].registry_keys so uninstall removes it.
 __declspec(dllimport) HRESULT __stdcall GetCurrentProcessExplicitAppUserModelID(PWSTR *app_id);

@@ -531,6 +531,9 @@ int main(int argc, char **argv) {
     // Stable taskbar identity. Without it the Win11 taskbar keys the app by exe
     // path and can serve a stale cached icon from whatever lived there before
     // (the pre-raylib Timp had no embedded icon at all → blank taskbar icon).
+    // forge.toml stamps the same id on the installed shortcuts (app_id); that is
+    // how the shell maps the id back to "Timp" for the taskbar, jump list and
+    // the media overlay — the two must stay identical.
     SetCurrentProcessExplicitAppUserModelID(L"Fezcode.Timp");
 #endif
 

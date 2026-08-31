@@ -20,9 +20,9 @@ default_dir = "${PROGRAMFILES}/Timp"
 [uninstall]
 keep          = []
 settings_dirs = ["${APPDATA}/fezcode/Timp"]     # offered as "Also remove my settings and data"
-# The app (smtc.c) registers a display name for its AppUserModelID at runtime so
-# the Windows media overlay says "Timp" rather than "Fezcode.Timp". The installer
-# never writes that key, so it is not in the install log — name it here to remove it.
+# The app (smtc.c) registers a display name for its AppUserModelID at runtime (the
+# notification platform's registration for unpackaged apps). The installer never
+# writes that key, so it is not in the install log — name it here to remove it.
 registry_keys = ["HKCU\\Software\\Classes\\AppUserModelId\\Fezcode.Timp"]
 
 [[steps]]
@@ -73,6 +73,7 @@ target   = "${INSTALLDIR}/timp.exe"
 location = "${DESKTOP}/Timp.lnk"
 name     = "Timp"
 icon     = "${INSTALLDIR}/timp.exe"
+app_id   = "Fezcode.Timp"        # = SetCurrentProcessExplicitAppUserModelID in rl_main.c
 label    = "Create Desktop Shortcut"
 optional = true
 default  = true
@@ -82,6 +83,7 @@ target   = "${INSTALLDIR}/timp.exe"
 location = "${STARTMENU}/Timp/Timp.lnk"
 name     = "Timp"
 icon     = "${INSTALLDIR}/timp.exe"
+app_id   = "Fezcode.Timp"        # the shell resolves the process's id through this shortcut
 label    = "Create Start Menu Entry"
 optional = true
 default  = true
