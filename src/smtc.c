@@ -464,7 +464,8 @@ static DWORD WINAPI smtc_thread(LPVOID param) {
 // registered app; with nothing registered for ours it just prints the raw id
 // ("Fezcode.Timp"). This is the documented desktop-app registration that gives
 // the id a real display name. The id is read back from the process rather than
-// spelled out again here, so it cannot drift from the one main() sets.
+// spelled out again here, so it cannot drift from the one main() sets. The key
+// is listed in forge.toml [uninstall].registry_keys so uninstall removes it.
 __declspec(dllimport) HRESULT __stdcall GetCurrentProcessExplicitAppUserModelID(PWSTR *app_id);
 
 static void register_display_name(void) {

@@ -32,7 +32,7 @@
 #define ARTS (WW - 2 * PAD)
 #define DRAWER_W 320           // playlist drawer width (logical px); window grows by this
 #define WMAXW (WW + DRAWER_W)  // render target width covers player + drawer
-#define TIMP_VERSION "0.12.0"  // keep in sync with forge.toml
+#define TIMP_VERSION "0.12.1"  // keep in sync with forge.toml
 
 // ---------- palette ----------
 static const Color BG0 = { 24, 21, 17, 255 };
