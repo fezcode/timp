@@ -12,7 +12,7 @@
 set -e
 cd "$(dirname "$0")"
 
-VERSION=0.11.0
+VERSION=0.12.2
 sh build-macos.sh
 
 APP=dist/macos-arm64/Timp.app
