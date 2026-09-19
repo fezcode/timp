@@ -14,6 +14,7 @@ typedef struct {
     int   playlist_side;   // 0 = right, 1 = left
     int   prev_mode;       // 0 = smart (restart if >5s, else prev) · 1 = direct (always prev)
     bool  hisashi_menubar; // publish the menus to Hisashi's menubar (hoswl); harmless without Hisashi
+    char  output_device[256]; // playback device name; "" = system default (names, not indices, survive replugging)
 } RlConfig;
 
 void rlconfig_defaults(RlConfig *c);

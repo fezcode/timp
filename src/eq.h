@@ -37,6 +37,14 @@ float eq_get_frequency(const Eq* eq, int band);
 void eq_flat(Eq* eq);
 void eq_reset_state(Eq* eq);
 
+// Presets. The active one is derived from the live gains rather than stored,
+// so dragging any slider falls back to "Custom" on its own and config.ini
+// keeps persisting nothing but the ten gains.
+int         eq_preset_count(void);
+const char* eq_preset_name(int preset);       // NULL when out of range
+void        eq_preset_apply(Eq* eq, int preset);
+int         eq_preset_match(const Eq* eq);    // preset index, or -1 for "Custom"
+
 // Process interleaved float samples in-place.
 void eq_process(Eq* eq, float* samples, int num_frames, int num_channels);
 

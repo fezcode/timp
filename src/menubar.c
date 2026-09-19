@@ -12,6 +12,7 @@
 #define HOSWL_IMPLEMENTATION
 #include "hoswl.h"
 #include "menubar.h"
+#include "eq.h"        // preset names for the Audio menu
 
 #include <stdint.h>
 #include <stdio.h>
@@ -41,7 +42,7 @@ static uint32_t fingerprint(const MenubarState *s) {
     const int fields[] = { s->loaded, s->playing, s->has_next, s->has_prev, s->shuffle, s->repeat,
                            s->art_mode, s->drawer_open, s->drawer_view, s->eq_on, s->eq_panel,
                            s->settings_open, s->lyrics_open, s->aot, s->side, s->prev_mode,
-                           s->muted, s->playlist_dirty, s->qcount > 0 };
+                           s->muted, s->playlist_dirty, s->qcount > 0, s->eq_preset, s->sleep_min };
     for (size_t i = 0; i < sizeof fields / sizeof fields[0]; i++) { FNV(fields[i]); FNV(fields[i] >> 8); }
     #undef FNV
     return h;
@@ -84,6 +85,11 @@ int menubar_build_text(const MenubarState *s, char *text, size_t cap) {
     PUT("  repeat.0|Off||%s\n", RADIO(s->repeat == 0));
     PUT("  repeat.1|One||%s\n", RADIO(s->repeat == 1));
     PUT("  repeat.2|All||%s\n", RADIO(s->repeat == 2));
+    PUT(" -\n");
+    PUT(" pb.sleep|Sleep Timer|>\n");
+    PUT("  sleep.0|Off||%s\n", RADIO(s->sleep_min == 0));
+    for (int m = 15; m <= 60; m += 15)
+        PUT("  sleep.%d|%d minutes||%s\n", m, m, RADIO(s->sleep_min == m));
 
     PUT("Audio\n");
     PUT(" audio.up|Volume Up|Up\n");
@@ -92,6 +98,11 @@ int menubar_build_text(const MenubarState *s, char *text, size_t cap) {
     PUT(" -\n");
     PUT(" audio.eq|Equalizer||%s\n", RADIO(s->eq_on));
     PUT(" audio.eqflat|Flatten Equalizer\n");
+    PUT(" audio.eqpreset|Equalizer Preset|>\n");
+    for (int p = 0; p < eq_preset_count(); p++)
+        PUT("  eqp.%d|%s||%s\n", p, eq_preset_name(p), RADIO(s->eq_preset == p));
+    PUT("  -\n");
+    PUT("  eqp.custom|Custom||%sd\n", RADIO(s->eq_preset < 0));   // an indicator, not an action
     PUT(" -\n");
     PUT(" audio.eqpanel|Equalizer Panel|E|%s\n", RADIO(s->eq_panel));
 

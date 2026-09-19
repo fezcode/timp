@@ -77,6 +77,56 @@ void eq_flat(Eq* eq) {
     eq_reset_state(eq);
 }
 
+// ---- presets -------------------------------------------------------------
+// One row of ten gains per preset, in the band order of DEFAULT_FREQS
+// (60 / 170 / 310 / 600 / 1k / 3k / 6k / 12k / 14k / 16k).
+
+typedef struct {
+    const char* name;
+    float gains[EQ_BANDS];
+} EqPreset;
+
+static const EqPreset PRESETS[] = {
+    { "Flat",         {  0,  0,  0,  0,  0,  0,  0,  0,  0,  0 } },
+    { "Rock",         {  5,  4,  2, -1, -2,  1,  3,  5,  5,  4 } },
+    { "Pop",          { -1,  1,  3,  4,  3,  0, -1, -1, -2, -2 } },
+    { "Jazz",         {  3,  2,  1,  2, -1, -1,  0,  2,  3,  3 } },
+    { "Vocal",        { -2, -3, -2,  1,  4,  5,  4,  2,  0, -1 } },
+    { "Bass Boost",   {  7,  6,  4,  2,  0,  0,  0,  0,  0,  0 } },
+    { "Treble Boost", {  0,  0,  0,  0,  0,  2,  4,  6,  6,  6 } },
+    { "Loudness",     {  6,  4,  1,  0, -2, -1,  1,  4,  5,  6 } },
+};
+
+#define EQ_PRESET_COUNT ((int)(sizeof(PRESETS) / sizeof(PRESETS[0])))
+
+int eq_preset_count(void) { return EQ_PRESET_COUNT; }
+
+const char* eq_preset_name(int preset) {
+    if (preset < 0 || preset >= EQ_PRESET_COUNT) return NULL;
+    return PRESETS[preset].name;
+}
+
+void eq_preset_apply(Eq* eq, int preset) {
+    if (preset < 0 || preset >= EQ_PRESET_COUNT) return;
+    for (int i = 0; i < EQ_BANDS; i++) {
+        eq->bands[i].gain_db = PRESETS[preset].gains[i];
+        recompute_band(&eq->bands[i], eq->sample_rate);
+    }
+    eq_reset_state(eq);
+}
+
+int eq_preset_match(const Eq* eq) {
+    for (int p = 0; p < EQ_PRESET_COUNT; p++) {
+        bool same = true;
+        for (int i = 0; i < EQ_BANDS && same; i++) {
+            float d = eq->bands[i].gain_db - PRESETS[p].gains[i];
+            if (d < -0.01f || d > 0.01f) same = false;
+        }
+        if (same) return p;
+    }
+    return -1;   // Custom
+}
+
 void eq_reset_state(Eq* eq) {
     for (int i = 0; i < EQ_BANDS; i++) {
         for (int c = 0; c < EQ_MAX_CHANNELS; c++) {

@@ -2,7 +2,7 @@
 // Pure: no window, no pipe, no audio (hoswl's offline compile step only).
 //
 // build + run (MSYS2 MinGW gcc, from the repo root):
-//   gcc -O2 -std=c11 -Isrc src/menubar.c tools/menubar_test.c -o build/menubar_test.exe && build/menubar_test.exe
+//   gcc -O2 -std=c11 -Isrc src/menubar.c src/eq.c tools/menubar_test.c -o build/menubar_test.exe && build/menubar_test.exe
 #include "menubar.h"
 #include "hoswl.h"   // hoswl_compile_menu_text (implementation lives in menubar.c)
 
@@ -23,12 +23,15 @@ int main(void) {
     CHECK(strstr(text, " file.clear|Clear Playlist||d\n") != NULL, "Clear Playlist disabled for an empty queue");
     CHECK(strstr(text, "  viz.0|Album Art||x\n") != NULL, "Album Art visualizer checked by default");
     CHECK(strstr(text, "  side.0|Right||x\n") != NULL, "drawer side Right by default");
+    CHECK(strstr(text, "  eqp.0|Flat||x\n") != NULL, "Flat EQ preset checked by default");
+    CHECK(strstr(text, "  sleep.0|Off||x\n") != NULL, "sleep timer off by default");
+    CHECK(strstr(text, "  sleep.45|45 minutes||c\n") != NULL, "every sleep step is listed");
     CHECK(hoswl_compile_menu_text(text, json, sizeof json, err, sizeof err) == 0, "DSL compiles to JSON");
 
     // Playing, dirty queue of 3, shuffle + repeat all, EQ on, bars visualizer, muted.
     s.loaded = true; s.playing = true; s.has_next = true; s.shuffle = true; s.repeat = 2; s.art_mode = 1;
     s.eq_on = true; s.muted = true; s.playlist_dirty = true; s.qcount = 3; s.side = 1; s.prev_mode = 1;
-    s.drawer_open = true; s.aot = true;
+    s.drawer_open = true; s.aot = true; s.eq_preset = 5; s.sleep_min = 30;
     CHECK(menubar_build_text(&s, text, sizeof text) == 0, "build while playing");
     CHECK(strstr(text, " pb.toggle|Pause|Space|\n") != NULL, "Play row reads Pause while playing");
     CHECK(strstr(text, " pb.next|Next||\n") != NULL, "Next enabled with a following track");
@@ -42,8 +45,17 @@ int main(void) {
     CHECK(strstr(text, "  side.1|Left||x\n") != NULL, "drawer side Left checked");
     CHECK(strstr(text, "  prev.1|Direct||x\n") != NULL, "direct prev checked");
     CHECK(strstr(text, " view.aot|Always on Top|T|x\n") != NULL, "always on top checked");
+    CHECK(strstr(text, "  eqp.5|Bass Boost||x\n") != NULL, "the chosen EQ preset is checked");
+    CHECK(strstr(text, "  eqp.custom|Custom||cd\n") != NULL, "Custom is an inert indicator");
+    CHECK(strstr(text, "  sleep.30|30 minutes||x\n") != NULL, "armed sleep timer checked");
     CHECK(hoswl_compile_menu_text(text, json, sizeof json, err, sizeof err) == 0, "DSL while playing compiles to JSON");
     CHECK(strstr(json, "\"id\":\"pb.repeat\",\"label\":\"Repeat\",\"items\":[") != NULL, "repeat is a submenu in the JSON");
+
+    // Custom gains: no preset row is checked, the indicator is.
+    s.eq_preset = -1;
+    CHECK(menubar_build_text(&s, text, sizeof text) == 0, "build with custom EQ gains");
+    CHECK(strstr(text, "  eqp.custom|Custom||xd\n") != NULL, "Custom indicator checked for custom gains");
+    CHECK(strstr(text, "  eqp.5|Bass Boost||c\n") != NULL, "no preset checked for custom gains");
 
     char tiny[64];
     CHECK(menubar_build_text(&s, tiny, sizeof tiny) == -1, "tiny buffer rejected");

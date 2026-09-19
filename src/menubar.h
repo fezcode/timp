@@ -31,6 +31,8 @@ typedef struct {
     bool muted;
     bool playlist_dirty;
     int  qcount;
+    int  eq_preset;         // eq_preset_match(): index, or -1 for Custom
+    int  sleep_min;         // sleep timer, 0 = off
 } MenubarState;
 
 void menubar_init(const char *app_version);   // once, before the first menubar_frame

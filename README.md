@@ -38,12 +38,20 @@ Finder "Open With" support.
   drives), **reopen** it from an in-app library, and overwrite with a confirm;
   stored in `%APPDATA%\Timp\Playlists\`
 - **10-band equalizer** — 60 / 170 / 310 / 600 Hz / 1 / 3 / 6 / 12 / 14 / 16 kHz,
-  with `ON` / `FLAT`
+  with `ON` / `FLAT` and eight **presets** (Flat, Rock, Pop, Jazz, Vocal, Bass
+  Boost, Treble Boost, Loudness) on a `‹ ›` selector in the panel header. The
+  name is read back from the sliders, so nudging a band shows **Custom**
 - **Transport** — play/pause, prev/next, **drag-to-scrub** seeking, volume,
   **fixed-order shuffle** (the whole list is shuffled once; next/prev follow that
   order), and 3-state repeat (off / one / all)
 - **Tags** — title / artist / album read from ID3v2 and Vorbis comments
   (UTF-8 / UTF-16, full Latin + Turkish glyph coverage)
+- **Output device** — send audio to any playback device, not just the system
+  default; picked from a list in Settings and remembered **by name**, so it
+  survives replugging. The track keeps playing across a switch, and an
+  unavailable device quietly falls back to the default
+- **Sleep timer** — Off / 15 / 30 / 45 / 60 minutes with a live countdown; the
+  last ten seconds fade out and it pauses (the volume setting is untouched)
 - **System integration** — system-wide media keys, always-on-top, and a
   procedurally-drawn app/taskbar icon
 - **Hisashi menubar** (Windows) — with [Hisashi](https://github.com/fezcode/hisashi) running,
@@ -158,9 +166,13 @@ always_on_top = 0
 eq_enabled = 0
 eq0 = 0.00          # … eq9 — per-band gains
 playlist_side = 0   # 0 = drawer on the right, 1 = on the left
+output_device =     # playback device name; absent = the system default
 win_x = ...
 win_y = ...
 ```
+
+The sleep timer is deliberately **not** persisted — it would be a surprise to
+inherit one on the next launch.
 
 Saved playlists are standard `.m3u8` files in `%APPDATA%\Timp\Playlists\`
 (macOS: `~/.timp/Playlists/`; use **Settings → Open folder** to reveal it).
@@ -180,7 +192,7 @@ src/
   mediakeys.c    system-wide media-key hotkeys (Windows)
   mediakeys_mac.m media keys via MPRemoteCommandCenter (macOS)
   singleinst.c   single instance — Win32 mutex / Unix socket file handoff
-  eq.c / fft.c   10-band EQ + spectrum FFT
+  eq.c / fft.c   10-band EQ, presets + spectrum FFT
   playlist.c     queue / index + fixed-order shuffle
   playlistio.c   save / load / list .m3u8 playlists
   icon.h         procedural app icon (window icon + .ico + installer)

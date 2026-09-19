@@ -32,7 +32,7 @@
 #define ARTS (WW - 2 * PAD)
 #define DRAWER_W 320           // playlist drawer width (logical px); window grows by this
 #define WMAXW (WW + DRAWER_W)  // render target width covers player + drawer
-#define TIMP_VERSION "0.12.2"  // keep in sync with forge.toml
+#define TIMP_VERSION "0.13.0"  // keep in sync with forge.toml
 
 // ---------- palette ----------
 static const Color BG0 = { 24, 21, 17, 255 };
@@ -65,6 +65,18 @@ static int       g_repeat = 0;          // 0 off · 1 one · 2 all
 static int       g_prev_mode = 0;       // 0 smart (>5s restarts, else prev) · 1 direct (always prev)
 static int       g_queue_scroll = 0;
 static int       g_art_mode = 0;        // 0 cover · 1 bars · 2 wave
+
+// ---- output device picker (overlay over the art square, from Settings) ----
+static bool      g_dev_open = false;
+static int       g_dev_scroll = 0;
+static char      g_dev_name[256] = "";  // "" = system default (persisted)
+
+// ---- sleep timer ----
+#define SLEEP_FADE 10.0                 // seconds of fade-out before it pauses
+static const int SLEEP_STEPS[] = { 0, 15, 30, 45, 60 };   // minutes; 0 = off
+#define SLEEP_NSTEPS ((int)(sizeof(SLEEP_STEPS) / sizeof(SLEEP_STEPS[0])))
+static int       g_sleep_step = 0;      // index into SLEEP_STEPS
+static double    g_sleep_at = 0;        // GetTime() when it fires
 
 // ---- playlist drawer (slides out the side, extending the window) ----
 static int       g_side = 0;            // 0 = right · 1 = left (persisted)
@@ -314,6 +326,13 @@ static void menu_click(const char *id) {
     else if (IS("audio.eq"))      { if (g_audio) { Eq *e = audio_get_eq(g_audio); eq_set_enabled(e, !eq_is_enabled(e)); } }
     else if (IS("audio.eqflat"))  { if (g_audio) eq_flat(audio_get_eq(g_audio)); }
     else if (IS("audio.eqpanel")) { g_show_eq = !g_show_eq; if (g_show_eq) { g_show_settings = g_show_lyrics = false; } }
+    else if (sscanf(id, "eqp.%d", &n) == 1) { if (g_audio && n >= 0 && n < eq_preset_count()) eq_preset_apply(audio_get_eq(g_audio), n); }
+    else if (sscanf(id, "sleep.%d", &n) == 1) {
+        g_sleep_step = 0;                                       // map the chosen minutes onto a step
+        for (int i = 0; i < SLEEP_NSTEPS; i++) if (SLEEP_STEPS[i] == n) g_sleep_step = i;
+        if (g_audio) audio_set_fade(g_audio, 1.0f);
+        if (g_sleep_step > 0) g_sleep_at = GetTime() + SLEEP_STEPS[g_sleep_step] * 60.0;
+    }
     else if (sscanf(id, "viz.%d", &n) == 1) { if (n >= 0 && n < 3) g_art_mode = n; }
     else if (IS("view.drawer"))   { g_show_queue = !g_show_queue; if (g_show_queue) { if (g_drawer_view == 1) g_drawer_view = 0; } else { g_naming = false; g_confirm_overwrite = false; } }
     else if (IS("view.lyrics"))   { g_show_lyrics = !g_show_lyrics; if (g_show_lyrics) { g_show_eq = g_show_settings = false; } }
@@ -412,6 +431,25 @@ static void draw_fit(Font f, const char *txt, Vector2 pos, float size, float sp,
     }
     DrawTextEx(f, buf, pos, size, sp, c);
 }
+
+// ---------- sleep timer / output device helpers ----------
+static void sleep_cycle(void) {
+    g_sleep_step = (g_sleep_step + 1) % SLEEP_NSTEPS;
+    if (g_audio) audio_set_fade(g_audio, 1.0f);      // drop any fade in progress
+    if (g_sleep_step > 0) g_sleep_at = GetTime() + SLEEP_STEPS[g_sleep_step] * 60.0;
+}
+
+// Switch output, then read back what actually opened: an unknown or refused
+// device falls back to the system default and must not be persisted as chosen.
+static void apply_device(const char *name) {
+    if (!g_audio) return;
+    audio_set_device(g_audio, name);
+    snprintf(g_dev_name, sizeof(g_dev_name), "%s", audio_current_device(g_audio));
+}
+
+// Rows of the device overlay: "System default" first, then the enumerated ones.
+static int dev_rows(void) { return (g_audio ? audio_device_count(g_audio) : 0) + 1; }
+static int dev_visible(void) { return (ARTS - 108) / 26; }
 
 // ---------- row context menu ----------
 // Items for the open context menu. Returns the count; `en` marks clickable ones.
@@ -568,7 +606,7 @@ int main(int argc, char **argv) {
     // (ı ş ğ ç ö ü İ) and Western/Central-European accents; plus punctuation.
     static int cps[640]; int cpc = 0;
     for (int c = 0x20; c <= 0x24F; c++) cps[cpc++] = c;
-    static const int extra[] = { 0x2026, 0x2022, 0x2013, 0x2014, 0x2018, 0x2019, 0x201C, 0x201D };
+    static const int extra[] = { 0x2026, 0x2022, 0x2013, 0x2014, 0x2018, 0x2019, 0x201C, 0x201D, 0x2039, 0x203A };
     for (unsigned i = 0; i < sizeof(extra) / sizeof(extra[0]); i++) cps[cpc++] = extra[i];
 
     const int nsb = (int)(sizeof(UI_SEMIBOLD) / sizeof(UI_SEMIBOLD[0]));
@@ -617,6 +655,8 @@ int main(int argc, char **argv) {
         Eq *e0 = audio_get_eq(g_audio);
         eq_set_enabled(e0, cfg.eq_enabled);
         for (int i = 0; i < EQ_BANDS; i++) eq_set_gain(e0, i, cfg.eq_gains[i]);
+        if (cfg.output_device[0]) audio_set_device(g_audio, cfg.output_device);   // unknown name → default
+        snprintf(g_dev_name, sizeof(g_dev_name), "%s", audio_current_device(g_audio));
     }
     if (g_aot) SetWindowState(FLAG_WINDOW_TOPMOST);
     if (cfg.has_win_pos) SetWindowPosition(cfg.win_x, cfg.win_y);
@@ -634,6 +674,7 @@ int main(int argc, char **argv) {
     if (getenv("TIMP_SIDE")) g_side = atoi(getenv("TIMP_SIDE")) ? 1 : 0;   // 0 right · 1 left (test/override)
     if (getenv("TIMP_EQ")) g_show_eq = true;
     if (getenv("TIMP_SET")) g_show_settings = true;
+    if (getenv("TIMP_DEV")) { g_show_settings = true; if (g_audio) { audio_refresh_devices(g_audio); g_dev_open = true; } }   // (test/override)
     if (getenv("TIMP_LYR")) g_show_lyrics = true;
 
     bool dragging = false; Vector2 dragGrab = { 0 };
@@ -661,6 +702,19 @@ int main(int argc, char **argv) {
         int drawerShift = (g_side == 1) ? (dw - DRAWER_W) : WW;   // screen->drawer-local x shift
         bool loaded  = g_audio && audio_is_loaded(g_audio);
         bool playing = g_audio && audio_is_playing(g_audio);
+        if (!g_show_settings) g_dev_open = false;
+
+        // ---- sleep timer: fade the last SLEEP_FADE seconds out, then pause ----
+        if (g_sleep_step > 0 && g_audio) {
+            double left = g_sleep_at - GetTime();
+            if (left <= 0) {
+                audio_pause(g_audio);
+                audio_set_fade(g_audio, 1.0f);
+                g_sleep_step = 0;
+            } else {
+                audio_set_fade(g_audio, (left < SLEEP_FADE) ? (float)(left / SLEEP_FADE) : 1.0f);
+            }
+        }
 
         if (loaded && audio_finished(g_audio)) {
             if (g_repeat == 1) audio_play(g_audio);                 // repeat one → replay
@@ -686,6 +740,8 @@ int main(int argc, char **argv) {
           ms.drawer_open = g_show_queue; ms.drawer_view = g_drawer_view;
           ms.eq_on = g_audio && eq_is_enabled(audio_get_eq(g_audio)); ms.eq_panel = g_show_eq;
           ms.settings_open = g_show_settings; ms.lyrics_open = g_show_lyrics;
+          ms.eq_preset = g_audio ? eq_preset_match(audio_get_eq(g_audio)) : 0;
+          ms.sleep_min = SLEEP_STEPS[g_sleep_step];
           ms.aot = g_aot; ms.side = g_side; ms.prev_mode = g_prev_mode;
           ms.muted = g_audio && audio_get_volume(g_audio) <= 0.001f;
           ms.playlist_dirty = playlist_dirty(&g_pl); ms.qcount = playlist_count(&g_pl);
@@ -775,6 +831,7 @@ int main(int argc, char **argv) {
         // EQ panel geometry (lives in the art square)
         int eqTop = (int)artR.y + 60, eqBot = (int)(artR.y + artR.height) - 48;
         float eqSp = artR.width / 10.0f;
+        Rectangle presetR = { artR.x + 112, artR.y + 12, 132, 22 };
         Rectangle onR   = { artR.x + artR.width - 150, artR.y + 12, 56, 22 };
         Rectangle flatR = { artR.x + artR.width - 86, artR.y + 12, 70, 22 };
         Eq *eq = g_audio ? audio_get_eq(g_audio) : NULL;
@@ -834,11 +891,20 @@ int main(int argc, char **argv) {
             else if (CheckCollisionPointRec(mp, eqR)) { g_show_eq = !g_show_eq; if (g_show_eq) { g_show_settings = g_show_lyrics = false; } }
             else if (CheckCollisionPointRec(mp, setR)) { g_show_settings = !g_show_settings; if (g_show_settings) { g_show_eq = g_show_lyrics = false; } }
             else if (CheckCollisionPointRec(mp, lyrR)) { g_show_lyrics = !g_show_lyrics; if (g_show_lyrics) { g_show_eq = g_show_settings = false; } }
+            else if (g_show_settings && g_dev_open && CheckCollisionPointRec(mp, artR)) {
+                int top = (int)artR.y + 50, rowH = 26, vis = dev_visible();
+                int row = ((int)mp.y - top) / rowH;
+                if ((int)mp.y >= top && row >= 0 && row < vis && row + g_dev_scroll < dev_rows()) {
+                    int idx = row + g_dev_scroll;        // 0 = system default
+                    apply_device(idx == 0 ? "" : audio_device_name(g_audio, idx - 1));
+                }
+                g_dev_open = false;                      // any click inside closes it
+            }
             else if (g_show_settings && CheckCollisionPointRec(mp, artR)) {
-                int ry0 = (int)artR.y + 50, rowH = 31;   // 7 rows must clear the DATA FOLDER block at +268
+                int ry0 = (int)artR.y + 46, rowH = 26;   // 9 rows must clear the DATA FOLDER block at +286
                 int row = ((int)mp.y - ry0) / rowH;
-                Rectangle foldBtn = { artR.x + 20, artR.y + 308, 130, 26 };
-                if ((int)mp.y >= ry0 && row >= 0 && row < 7) {
+                Rectangle foldBtn = { artR.x + 20, artR.y + 318, 130, 24 };
+                if ((int)mp.y >= ry0 && row >= 0 && row < 9) {
                     if (row == 0) { g_aot = !g_aot; if (g_aot) SetWindowState(FLAG_WINDOW_TOPMOST); else ClearWindowState(FLAG_WINDOW_TOPMOST); }
                     else if (row == 1) playlist_set_shuffle(&g_pl, !playlist_shuffle(&g_pl));
                     else if (row == 2) { g_repeat = (g_repeat + 1) % 3; playlist_set_loop(&g_pl, g_repeat == 2); }
@@ -849,12 +915,20 @@ int main(int argc, char **argv) {
                         else audio_set_volume(g_audio, g_premute);
                     }
                     else if (row == 6) { g_hisashi_menubar = !g_hisashi_menubar; menubar_set_enabled(g_hisashi_menubar); }
+                    else if (row == 7 && g_audio) { audio_refresh_devices(g_audio); g_dev_scroll = 0; g_dev_open = true; }
+                    else if (row == 8) sleep_cycle();
                 }
                 else if (CheckCollisionPointRec(mp, foldBtn)) os_reveal_dir(dataDir);
             }
             else if (g_show_eq && eq && CheckCollisionPointRec(mp, artR)) {
                 if (CheckCollisionPointRec(mp, onR)) eq_set_enabled(eq, !eq_is_enabled(eq));
                 else if (CheckCollisionPointRec(mp, flatR)) eq_flat(eq);
+                else if (CheckCollisionPointRec(mp, presetR)) {
+                    int np = eq_preset_count(), cur = eq_preset_match(eq);   // -1 = Custom
+                    bool back = mp.x < presetR.x + 26;
+                    if (cur < 0) cur = back ? 0 : np - 1;                    // Custom steps into either end
+                    eq_preset_apply(eq, back ? (cur + np - 1) % np : (cur + 1) % np);
+                }
                 else for (int b = 0; b < EQ_BANDS; b++) {
                     float cx = artR.x + eqSp * b + eqSp / 2;
                     if (mp.x >= cx - eqSp / 2 && mp.x < cx + eqSp / 2 && mp.y >= eqTop - 12 && mp.y <= eqBot + 12) {
@@ -993,7 +1067,10 @@ int main(int argc, char **argv) {
 
         float wheel = GetMouseWheelMove();
         if (wheel != 0) {
-            if (g_show_queue) {
+            if (g_show_settings && g_dev_open) {
+                int maxs = dev_rows() - dev_visible(); if (maxs < 0) maxs = 0;
+                g_dev_scroll = clampi(g_dev_scroll - (int)wheel, 0, maxs);
+            } else if (g_show_queue) {
                 g_queue_scroll -= (int)wheel; int maxs = dTotal - dl.visible; if (maxs < 0) maxs = 0;
                 g_queue_scroll = clampi(g_queue_scroll, 0, maxs);
             } else if (g_show_lyrics && !g_lyrics.synced) {
@@ -1005,6 +1082,7 @@ int main(int argc, char **argv) {
         // ---- text entry: Save-flow name, or the open tab's search box ----
         if (!g_show_queue) { g_search_focus = false; g_ctx_open = false; }
         if (g_ctx_open && IsKeyPressed(KEY_ESCAPE)) g_ctx_open = false;
+        if (g_dev_open && IsKeyPressed(KEY_ESCAPE)) g_dev_open = false;
         if (g_naming) {
             text_input_utf8(g_name_buf, sizeof(g_name_buf), true);
             if (IsKeyPressed(KEY_BACKSPACE)) text_backspace_utf8(g_name_buf);
@@ -1306,6 +1384,17 @@ int main(int argc, char **argv) {
             rrBox(flatR, 0.4f, CARDBG, alpha(MUT, 180));
             Vector2 fw2 = MeasureTextEx(fSmall, "FLAT", 13, 0.5f);
             DrawTextEx(fSmall, "FLAT", (Vector2){ flatR.x + (flatR.width - fw2.x) / 2, flatR.y + 4 }, 13, 0.5f, MUT);
+            // preset selector — the name is derived from the gains, so dragging
+            // a band drops it back to "Custom" with no state to keep in sync
+            int pcur = eq ? eq_preset_match(eq) : -1;
+            const char *pname = (pcur >= 0) ? eq_preset_name(pcur) : "Custom";
+            bool phov = CheckCollisionPointRec(mp, presetR);
+            rrBox(presetR, 0.4f, CARDBG, phov ? alpha(TXT, 190) : alpha(MUT, 150));
+            DrawTextEx(fSmall, "\xe2\x80\xb9", (Vector2){ presetR.x + 9, presetR.y + 3 }, 14, 0, phov ? TXT : MUT);
+            DrawTextEx(fSmall, "\xe2\x80\xba", (Vector2){ presetR.x + presetR.width - 16, presetR.y + 3 }, 14, 0, phov ? TXT : MUT);
+            Vector2 pw = MeasureTextEx(fSmall, pname, 12, 0.3f);
+            DrawTextEx(fSmall, pname, (Vector2){ presetR.x + (presetR.width - pw.x) / 2, presetR.y + 5 }, 12, 0.3f,
+                       (pcur >= 0) ? g_accent : alpha(TXT, 190));
             int midY = (eqTop + eqBot) / 2;
             for (int b = 0; b < EQ_BANDS; b++) {
                 float cx = artR.x + eqSp * b + eqSp / 2;
@@ -1330,50 +1419,87 @@ int main(int argc, char **argv) {
         } else if (g_show_settings) {
             rrBox(artR, 0.05f, CARDBG, (Color){ 255, 255, 255, 14 });
             DrawTextEx(fEye, "SETTINGS", (Vector2){ artR.x + 16, artR.y + 16 }, 12, 3.0f, alpha(g_accent, 205));
-            const char *labels[7] = { "Always on top", "Shuffle", "Repeat", "Playlist side", "Prev button", "Mute", "Hisashi menubar" };
-            bool st[7] = { g_aot, playlist_shuffle(&g_pl), playlist_loop(&g_pl), false, false, g_audio ? audio_get_volume(g_audio) <= 0.001f : false,
-                           g_hisashi_menubar };
-            int ry0 = (int)artR.y + 50, rowH = 31;   // 7 rows must clear the DATA FOLDER block at +268
-            for (int i = 0; i < 7; i++) {
+            const char *labels[9] = { "Always on top", "Shuffle", "Repeat", "Playlist side", "Prev button", "Mute",
+                                      "Hisashi menubar", "Output device", "Sleep timer" };
+            bool st[9] = { g_aot, playlist_shuffle(&g_pl), playlist_loop(&g_pl), false, false, g_audio ? audio_get_volume(g_audio) <= 0.001f : false,
+                           g_hisashi_menubar, false, false };
+            int ry0 = (int)artR.y + 46, rowH = 26;   // 9 rows must clear the DATA FOLDER block at +286
+            for (int i = 0; i < 9; i++) {
                 float ry = (float)(ry0 + i * rowH);
                 bool hov = CheckCollisionPointRec(mp, (Rectangle){ artR.x, ry, artR.width, (float)rowH });
-                if (hov) DrawRectangleRounded((Rectangle){ artR.x + 6, ry, artR.width - 12, (float)rowH - 8 }, 0.3f, 6, (Color){ 255, 255, 255, 10 });
-                DrawTextEx(fMeta, labels[i], (Vector2){ artR.x + 20, ry + 8 }, 16, 0.3f, TXT);
-                float tx = artR.x + artR.width - 66, ty = ry + (rowH - 24) / 2.0f;
+                if (hov) DrawRectangleRounded((Rectangle){ artR.x + 6, ry + 1, artR.width - 12, (float)rowH - 2 }, 0.3f, 6, (Color){ 255, 255, 255, 10 });
+                DrawTextEx(fMeta, labels[i], (Vector2){ artR.x + 20, ry + 5 }, 16, 0.3f, TXT);
+                float tx = artR.x + artR.width - 66, ty = ry + (rowH - 22) / 2.0f;
                 if (i == 2) {  // repeat: 3-state pill (Off / One / All)
                     const char *rm[3] = { "Off", "One", "All" };
                     bool ron = g_repeat != 0;
-                    rrBox((Rectangle){ tx, ty, 46, 24 }, 0.5f, ron ? alpha(g_accent, 55) : TRK, ron ? g_accent : alpha(MUT, 120));
+                    rrBox((Rectangle){ tx, ty, 46, 22 }, 0.5f, ron ? alpha(g_accent, 55) : TRK, ron ? g_accent : alpha(MUT, 120));
                     Vector2 mw = MeasureTextEx(fSmall, rm[g_repeat], 13, 0.3f);
                     DrawTextEx(fSmall, rm[g_repeat], (Vector2){ tx + (46 - mw.x) / 2, ty + 4 }, 13, 0.3f, ron ? g_accent : MUT);
                 } else if (i == 3) {  // playlist side: Left / Right pill
                     const char *sd = (g_side == 1) ? "Left" : "Right";
-                    rrBox((Rectangle){ tx, ty, 46, 24 }, 0.5f, alpha(g_accent, 55), g_accent);
+                    rrBox((Rectangle){ tx, ty, 46, 22 }, 0.5f, alpha(g_accent, 55), g_accent);
                     Vector2 mw = MeasureTextEx(fSmall, sd, 13, 0.3f);
                     DrawTextEx(fSmall, sd, (Vector2){ tx + (46 - mw.x) / 2, ty + 4 }, 13, 0.3f, g_accent);
                 } else if (i == 4) {  // prev button: Smart / Direct pill
                     const char *pm = (g_prev_mode == 0) ? "Smart" : "Direct";
-                    float pw = 56, px = artR.x + artR.width - 20 - pw;
-                    rrBox((Rectangle){ px, ty, pw, 24 }, 0.5f, alpha(g_accent, 55), g_accent);
+                    float pw2 = 56, px = artR.x + artR.width - 20 - pw2;
+                    rrBox((Rectangle){ px, ty, pw2, 22 }, 0.5f, alpha(g_accent, 55), g_accent);
                     Vector2 mw = MeasureTextEx(fSmall, pm, 13, 0.3f);
-                    DrawTextEx(fSmall, pm, (Vector2){ px + (pw - mw.x) / 2, ty + 4 }, 13, 0.3f, g_accent);
+                    DrawTextEx(fSmall, pm, (Vector2){ px + (pw2 - mw.x) / 2, ty + 4 }, 13, 0.3f, g_accent);
+                } else if (i == 7) {  // output device: the name in use; the row opens the list
+                    const char *dn = g_dev_name[0] ? g_dev_name : "System default";
+                    float dx = artR.x + 148;
+                    draw_fit(fSmall, dn, (Vector2){ dx, ry + 6 }, 13, 0.2f, g_dev_name[0] ? alpha(g_accent, 230) : alpha(MUT, 205),
+                             artR.x + artR.width - 20 - dx);
+                } else if (i == 8) {  // sleep timer: Off / the minutes, then a live countdown
+                    char sl[16];
+                    bool son = g_sleep_step > 0;
+                    if (son) {
+                        int left = (int)(g_sleep_at - GetTime()); if (left < 0) left = 0;
+                        snprintf(sl, sizeof(sl), "%d:%02d", left / 60, left % 60);
+                    } else snprintf(sl, sizeof(sl), "Off");
+                    rrBox((Rectangle){ tx, ty, 46, 22 }, 0.5f, son ? alpha(g_accent, 55) : TRK, son ? g_accent : alpha(MUT, 120));
+                    Vector2 mw = MeasureTextEx(fSmall, sl, 13, 0.3f);
+                    DrawTextEx(fSmall, sl, (Vector2){ tx + (46 - mw.x) / 2, ty + 4 }, 13, 0.3f, son ? g_accent : MUT);
                 } else {
-                    rrFill((Rectangle){ tx, ty, 46, 24 }, 1, st[i] ? g_accent : TRK);
-                    float kx = st[i] ? tx + 46 - 13 : tx + 13;
-                    DrawCircle((int)kx, (int)(ty + 12), 9, st[i] ? BG1 : alpha(TXT, 210));
+                    rrFill((Rectangle){ tx, ty, 46, 22 }, 1, st[i] ? g_accent : TRK);
+                    float kx = st[i] ? tx + 46 - 12 : tx + 12;
+                    DrawCircle((int)kx, (int)(ty + 11), 8, st[i] ? BG1 : alpha(TXT, 210));
                 }
             }
             // data folder (config + saved playlists) + reveal button
-            DrawTextEx(fEye, "DATA FOLDER", (Vector2){ artR.x + 20, artR.y + 268 }, 11, 2.0f, alpha(g_accent, 190));
-            draw_fit(fSmall, dataDir, (Vector2){ artR.x + 20, artR.y + 286 }, 13, 0.2f, alpha(MUT, 205), artR.width - 40);
-            Rectangle foldBtn = { artR.x + 20, artR.y + 308, 130, 26 };
+            DrawTextEx(fEye, "DATA FOLDER", (Vector2){ artR.x + 20, artR.y + 286 }, 11, 2.0f, alpha(g_accent, 190));
+            draw_fit(fSmall, dataDir, (Vector2){ artR.x + 20, artR.y + 302 }, 13, 0.2f, alpha(MUT, 205), artR.width - 40);
+            Rectangle foldBtn = { artR.x + 20, artR.y + 318, 130, 24 };
             bool hf = CheckCollisionPointRec(mp, foldBtn);
             rrBox(foldBtn, 0.4f, CARDBG, hf ? alpha(TXT, 220) : alpha(MUT, 150));
             Vector2 fw3 = MeasureTextEx(fSmall, "Open folder", 13, 0.3f);
-            DrawTextEx(fSmall, "Open folder", (Vector2){ foldBtn.x + (foldBtn.width - fw3.x) / 2, foldBtn.y + 6 }, 13, 0.3f, hf ? TXT : MUT);
-            DrawTextEx(fSmall, "Playlists live here", (Vector2){ foldBtn.x + foldBtn.width + 12, foldBtn.y + 6 }, 12, 0.2f, alpha(MUT, 130));
-            DrawTextEx(fSmall, "Timp v" TIMP_VERSION "  \xc2\xb7  raylib edition", (Vector2){ artR.x + 20, artR.y + artR.height - 54 }, 13, 0.3f, alpha(TXT, 200));
+            DrawTextEx(fSmall, "Open folder", (Vector2){ foldBtn.x + (foldBtn.width - fw3.x) / 2, foldBtn.y + 5 }, 13, 0.3f, hf ? TXT : MUT);
+            DrawTextEx(fSmall, "Playlists live here", (Vector2){ foldBtn.x + foldBtn.width + 12, foldBtn.y + 5 }, 12, 0.2f, alpha(MUT, 130));
+            DrawTextEx(fSmall, "Timp v" TIMP_VERSION "  \xc2\xb7  raylib edition", (Vector2){ artR.x + 20, artR.y + artR.height - 48 }, 13, 0.3f, alpha(TXT, 200));
             DrawTextEx(fEye, "SPACE PLAY   Q QUEUE   E EQ   G SETTINGS", (Vector2){ artR.x + 20, artR.y + artR.height - 30 }, 10, 1.0f, alpha(MUT, 160));
+
+            // output-device list, over the rows it was opened from
+            if (g_dev_open) {
+                rrBox(artR, 0.05f, CARDBG, (Color){ 255, 255, 255, 14 });
+                DrawTextEx(fEye, "OUTPUT DEVICE", (Vector2){ artR.x + 16, artR.y + 16 }, 12, 3.0f, alpha(g_accent, 205));
+                int dtop = (int)artR.y + 50, dRowH = 26, vis = dev_visible(), nrows = dev_rows();
+                for (int i = 0; i < vis && i + g_dev_scroll < nrows; i++) {
+                    int idx = i + g_dev_scroll;                       // 0 = system default
+                    const char *nm = (idx == 0) ? "System default" : audio_device_name(g_audio, idx - 1);
+                    if (!nm) continue;
+                    float ry = (float)(dtop + i * dRowH);
+                    bool cur = (idx == 0) ? (g_dev_name[0] == 0) : (g_dev_name[0] && !strcmp(g_dev_name, nm));
+                    bool hov = CheckCollisionPointRec(mp, (Rectangle){ artR.x, ry, artR.width, (float)dRowH });
+                    if (hov) DrawRectangleRounded((Rectangle){ artR.x + 6, ry + 1, artR.width - 12, (float)dRowH - 2 }, 0.3f, 6, (Color){ 255, 255, 255, 10 });
+                    if (cur) DrawCircle((int)(artR.x + 26), (int)(ry + 13), 3, g_accent);
+                    draw_fit(fMeta, nm, (Vector2){ artR.x + 38, ry + 5 }, 15, 0.2f, cur ? g_accent : alpha(TXT, 215), artR.width - 58);
+                }
+                if (nrows > vis)
+                    DrawTextEx(fEye, "SCROLL FOR MORE", (Vector2){ artR.x + 20, artR.y + artR.height - 48 }, 10, 1.0f, alpha(MUT, 130));
+                DrawTextEx(fEye, "CLICK TO SELECT   ESC TO CLOSE", (Vector2){ artR.x + 20, artR.y + artR.height - 30 }, 10, 1.0f, alpha(MUT, 160));
+            }
         } else if (g_show_lyrics) {
             rrBox(artR, 0.05f, CARDBG, (Color){ 255, 255, 255, 14 });
             DrawTextEx(fEye, "LYRICS", (Vector2){ artR.x + 16, artR.y + 18 }, 12, 3.0f, alpha(g_accent, 205));
@@ -1563,6 +1689,7 @@ int main(int argc, char **argv) {
     save.playlist_side = g_side;
     save.prev_mode = g_prev_mode;
     save.hisashi_menubar = g_hisashi_menubar;
+    snprintf(save.output_device, sizeof(save.output_device), "%s", g_dev_name);
     save.win_x = g_base_x; save.win_y = g_base_y; save.has_win_pos = true;   // closed-window anchor
     rlconfig_save(&save);
     menubar_shutdown();   // "bye" to Hisashi

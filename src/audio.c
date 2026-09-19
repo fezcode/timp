@@ -18,16 +18,28 @@ static wchar_t* audio_utf8_to_w(const char* s) {
 }
 #endif
 
+typedef struct {
+    char name[256];
+    ma_device_id id;
+} AudioDeviceEntry;
+
 struct Audio {
+    ma_context context;
     ma_device device;
     ma_decoder decoder;
+    bool context_inited;
     bool device_inited;
     bool decoder_inited;
+
+    AudioDeviceEntry devices[AUDIO_MAX_DEVICES];
+    int  device_count;
+    char device_name[256];   // "" = system default
 
     bool playing;
     bool finished_flag;
 
     float volume;
+    float fade;            // sleep-timer fade-out gain, multiplied onto volume
     char path[520];
 
     float capture[VIZ_SAMPLES];
@@ -53,7 +65,7 @@ static void data_callback(ma_device* dev, void* output, const void* input, ma_ui
     ma_decoder_read_pcm_frames(&a->decoder, out, frames, &read);
     ma_mutex_unlock(&a->mutex);
 
-    float v = a->volume;
+    float v = a->volume * a->fade;
     for (size_t i = 0; i < (size_t)read * channels; i++) out[i] *= v;
 
     eq_process(&a->eq, out, (int)read, (int)channels);
@@ -76,29 +88,64 @@ static void data_callback(ma_device* dev, void* output, const void* input, ma_ui
     }
 }
 
-Audio* audio_create(void) {
-    Audio* a = (Audio*)calloc(1, sizeof(Audio));
-    if (!a) return NULL;
-    a->volume = 0.7f;
-    ma_mutex_init(&a->mutex);
+// Open (or reopen) the playback device. `id` NULL means the system default.
+// The EQ is re-initialised at the new sample rate with its gains carried over,
+// since eq_init() clears the struct.
+static bool audio_open_device(Audio* a, const ma_device_id* id) {
+    float gains[EQ_BANDS];
+    bool  eq_on = false;
+    if (a->device_inited) {                      // carry the EQ across a switch
+        eq_on = eq_is_enabled(&a->eq);
+        for (int i = 0; i < EQ_BANDS; i++) gains[i] = eq_get_gain(&a->eq, i);
+    } else {
+        for (int i = 0; i < EQ_BANDS; i++) gains[i] = 0.f;
+    }
 
     ma_device_config cfg = ma_device_config_init(ma_device_type_playback);
+    cfg.playback.pDeviceID = (ma_device_id*)id;
     cfg.playback.format = ma_format_f32;
     cfg.playback.channels = 2;
     cfg.sampleRate = 48000;
     cfg.dataCallback = data_callback;
     cfg.pUserData = a;
 
-    if (ma_device_init(NULL, &cfg, &a->device) != MA_SUCCESS) {
+    if (ma_device_init(a->context_inited ? &a->context : NULL, &cfg, &a->device) != MA_SUCCESS) {
+        a->device_inited = false;
+        return false;
+    }
+    a->device_inited = true;
+
+    eq_init(&a->eq, (int)a->device.sampleRate);
+    for (int i = 0; i < EQ_BANDS; i++) eq_set_gain(&a->eq, i, gains[i]);
+    eq_set_enabled(&a->eq, eq_on);
+
+    if (ma_device_start(&a->device) != MA_SUCCESS) {
+        fprintf(stderr, "audio: ma_device_start failed\n");
+        return false;
+    }
+    return true;
+}
+
+Audio* audio_create(void) {
+    Audio* a = (Audio*)calloc(1, sizeof(Audio));
+    if (!a) return NULL;
+    a->volume = 0.7f;
+    a->fade = 1.0f;
+    ma_mutex_init(&a->mutex);
+
+    // An explicit context is what makes the devices enumerable: ma_device_init
+    // would otherwise spin up a private one we cannot ask for a device list.
+    if (ma_context_init(NULL, 0, NULL, &a->context) == MA_SUCCESS) {
+        a->context_inited = true;
+        audio_refresh_devices(a);
+    }
+
+    if (!audio_open_device(a, NULL)) {
         fprintf(stderr, "audio: ma_device_init failed\n");
+        if (a->context_inited) ma_context_uninit(&a->context);
         ma_mutex_uninit(&a->mutex);
         free(a);
         return NULL;
-    }
-    a->device_inited = true;
-    eq_init(&a->eq, (int)a->device.sampleRate);
-    if (ma_device_start(&a->device) != MA_SUCCESS) {
-        fprintf(stderr, "audio: ma_device_start failed\n");
     }
     return a;
 }
@@ -109,6 +156,7 @@ void audio_destroy(Audio* a) {
     if (!a) return;
     if (a->device_inited) ma_device_uninit(&a->device);
     if (a->decoder_inited) ma_decoder_uninit(&a->decoder);
+    if (a->context_inited) ma_context_uninit(&a->context);
     ma_mutex_uninit(&a->mutex);
     free(a);
 }
@@ -198,6 +246,12 @@ void audio_set_volume(Audio* a, float v) {
 }
 float audio_get_volume(const Audio* a) { return a->volume; }
 
+void audio_set_fade(Audio* a, float f) {
+    if (f < 0.f) f = 0.f;
+    if (f > 1.f) f = 1.f;
+    a->fade = f;
+}
+
 double audio_position_seconds(const Audio* a) {
     if (!a->decoder_inited) return 0.0;
     ma_uint64 cursor = 0;
@@ -236,4 +290,87 @@ int audio_snapshot_waveform(Audio* a, float* out, int n) {
 
 const char* audio_current_path(const Audio* a) {
     return a->decoder_inited ? a->path : NULL;
+}
+
+// ---- output device selection --------------------------------------------
+
+void audio_refresh_devices(Audio* a) {
+    a->device_count = 0;
+    if (!a->context_inited) return;
+
+    ma_device_info* infos = NULL;
+    ma_uint32 count = 0;
+    if (ma_context_get_devices(&a->context, &infos, &count, NULL, NULL) != MA_SUCCESS) return;
+
+    // Copy out: miniaudio owns `infos` and recycles it on the next enumeration.
+    for (ma_uint32 i = 0; i < count && a->device_count < AUDIO_MAX_DEVICES; i++) {
+        AudioDeviceEntry* e = &a->devices[a->device_count++];
+        snprintf(e->name, sizeof(e->name), "%s", infos[i].name);
+        e->id = infos[i].id;
+    }
+}
+
+int audio_device_count(const Audio* a) { return a->device_count; }
+
+const char* audio_device_name(const Audio* a, int i) {
+    if (i < 0 || i >= a->device_count) return NULL;
+    return a->devices[i].name;
+}
+
+const char* audio_current_device(const Audio* a) { return a->device_name; }
+
+bool audio_set_device(Audio* a, const char* name) {
+    bool want_default = (name == NULL || name[0] == 0);
+
+    int idx = -1;
+    if (!want_default) {
+        for (int i = 0; i < a->device_count; i++) {
+            if (!strcmp(a->devices[i].name, name)) { idx = i; break; }
+        }
+        if (idx < 0) {                       // re-enumerate once: it may be newly plugged in
+            audio_refresh_devices(a);
+            for (int i = 0; i < a->device_count; i++) {
+                if (!strcmp(a->devices[i].name, name)) { idx = i; break; }
+            }
+        }
+    }
+
+    const char* target = (idx >= 0) ? a->devices[idx].name : "";
+    if (!strcmp(target, a->device_name) && a->device_inited) return idx >= 0 || want_default;
+
+    // Remember what was playing: the decoder is tied to the device's channel
+    // count and sample rate, so a switch may have to rebuild it.
+    bool   was_playing = a->playing;
+    double pos = audio_position_seconds(a);
+    char   path[520];
+    snprintf(path, sizeof(path), "%s", a->path);
+    bool   had_track = a->decoder_inited;
+    ma_uint32 old_channels = a->device_inited ? a->device.playback.channels : 0;
+    ma_uint32 old_rate     = a->device_inited ? a->device.sampleRate : 0;
+
+    a->playing = false;                      // park the callback before it loses its device
+    if (a->device_inited) {
+        ma_device_uninit(&a->device);        // joins the audio thread
+        a->device_inited = false;
+    }
+
+    const ma_device_id* id = (idx >= 0) ? &a->devices[idx].id : NULL;
+    bool ok = audio_open_device(a, id);
+    if (!ok && idx >= 0) {                   // refused: don't leave the app mute
+        fprintf(stderr, "audio: cannot open '%s', falling back to the default device\n", name);
+        if (a->device_inited) { ma_device_uninit(&a->device); a->device_inited = false; }
+        ok = audio_open_device(a, NULL);
+        idx = -1;
+    }
+    snprintf(a->device_name, sizeof(a->device_name), "%s", (idx >= 0) ? a->devices[idx].name : "");
+
+    if (had_track && a->device_inited &&
+        (a->device.playback.channels != old_channels || a->device.sampleRate != old_rate)) {
+        audio_load(a, path);                 // rebuild the decoder at the new format
+    }
+    if (had_track && a->decoder_inited) {
+        audio_seek_seconds(a, pos);
+        if (was_playing) audio_play(a);
+    }
+    return ok && (idx >= 0 || want_default);
 }

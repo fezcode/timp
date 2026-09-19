@@ -62,6 +62,7 @@ void rlconfig_defaults(RlConfig *c) {
     c->playlist_side = 0;
     c->prev_mode = 0;
     c->hisashi_menubar = true;
+    c->output_device[0] = 0;
 }
 
 bool rlconfig_load(RlConfig *c) {
@@ -69,7 +70,7 @@ bool rlconfig_load(RlConfig *c) {
     char path[600]; cfg_path(path, sizeof(path));
     FILE *f = fopen(path, "r");
     if (!f) return false;
-    char line[256];
+    char line[512];
     while (fgets(line, sizeof(line), f)) {
         char key[64]; float fv; int iv;
         if (sscanf(line, " %63[^= ] = %f", key, &fv) == 2) {
@@ -88,6 +89,14 @@ bool rlconfig_load(RlConfig *c) {
             else if (!strcmp(key, "prev_mode")) c->prev_mode = iv;
             else if (!strcmp(key, "hisashi_menubar")) c->hisashi_menubar = iv != 0;
         }
+        char sv[256];
+        if (sscanf(line, " %63[^= ] = %255[^\n]", key, sv) == 2) {   // string-valued keys
+            if (!strcmp(key, "output_device")) {
+                int n = (int)strlen(sv);                              // device names may contain spaces
+                while (n > 0 && (sv[n-1] == ' ' || sv[n-1] == '\r' || sv[n-1] == '\n')) sv[--n] = 0;
+                snprintf(c->output_device, sizeof(c->output_device), "%s", sv);
+            }
+        }
     }
     fclose(f);
     return true;
@@ -105,6 +114,7 @@ bool rlconfig_save(const RlConfig *c) {
     fprintf(f, "playlist_side=%d\n", c->playlist_side);
     fprintf(f, "prev_mode=%d\n", c->prev_mode);
     fprintf(f, "hisashi_menubar=%d\n", c->hisashi_menubar ? 1 : 0);
+    if (c->output_device[0]) fprintf(f, "output_device=%s\n", c->output_device);
     if (c->has_win_pos) { fprintf(f, "win_x=%d\n", c->win_x); fprintf(f, "win_y=%d\n", c->win_y); }
     fclose(f);
     return true;
