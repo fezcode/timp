@@ -1,5 +1,5 @@
 // Standalone generator for assets/timp.ico. Reuses the shared icon renderer.
-// Writes a 6-frame ICO (16/24/32/48/64/256), each frame a 32-bit BGRA DIB.
+// Writes a 7-frame ICO (16/24/32/48/64/128/256), each frame a 32-bit BGRA DIB.
 #include "icon.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -58,7 +58,7 @@ static void write_frame(FILE *f, int size) {
 
 int main(int argc, char **argv) {
     const char *out = (argc > 1) ? argv[1] : "assets/timp.ico";
-    const int sizes[] = { 16, 24, 32, 48, 64, 256 };
+    const int sizes[] = { 16, 24, 32, 48, 64, 128, 256 };
     const int n = (int)(sizeof(sizes) / sizeof(sizes[0]));
 
     FILE *f = fopen(out, "wb");
